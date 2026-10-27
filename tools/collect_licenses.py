@@ -13,7 +13,9 @@ from packaging.requirements import Requirement
 def collect(destination):
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
-    queue = ['edge-tts', 'certifi', 'defusedxml', 'pyinstaller', 'pywebview']
+    queue = ['edge-tts', 'certifi', 'defusedxml', 'pyinstaller']
+    if sys.platform == 'win32':
+        queue.append('pywebview')
     seen = set()
     inventory = []
     while queue:

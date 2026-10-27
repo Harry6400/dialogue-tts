@@ -1,0 +1,107 @@
+"""Build and statically verify the native Apple Silicon app; never launch it."""
+from pathlib import Path
+import hashlib
+import os
+import platform
+import plistlib
+import shutil
+import subprocess
+import sys
+import zipfile
+
+from collect_licenses import collect
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def main():
+    if sys.platform != 'darwin' or platform.machine() != 'arm64':
+        raise SystemExit('Build on an Apple Silicon Mac with Swift command line tools.')
+    out = ROOT / 'dist'
+    work = ROOT / 'build' / 'macos'
+    work.mkdir(parents=True, exist_ok=True)
+    runtime_licenses = work / 'runtime-licenses'
+    collect(runtime_licenses)
+    icon = work / 'dialogue.icns'
+    subprocess.run(['/usr/bin/sips', '-s', 'format', 'icns', str(ROOT / 'assets' / 'dialogue.png'),
+                    '--out', str(icon)], check=True, stdout=subprocess.DEVNULL)
+    datas = [(str(ROOT / 'web_dialogue' / name), 'web_dialogue') for name in ('index.html', 'silence.mp3')]
+    datas += [(str(ROOT / 'third_party'), 'third_party'), (str(runtime_licenses), 'third_party/bundled-runtime')]
+    datas += [(str(ROOT / name), '.') for name in ('LICENSE', 'NOTICE')]
+    spec = work / 'dialogue-macos.spec'
+    spec.write_text(f'''from PyInstaller.utils.hooks import collect_submodules
+a = Analysis([{str(ROOT / 'mac_launcher.py')!r}], pathex=[{str(ROOT)!r}], binaries=[], datas={datas!r},
+    hiddenimports=collect_submodules('edge_tts') + ['web_dialogue.worker', 'web_dialogue.mp3_frames', 'web_dialogue.xml_pair', 'web_dialogue.updates'],
+    hookspath=[], hooksconfig={{}}, runtime_hooks=[], excludes=['tkinter', 'unittest', 'pytest', 'numpy', 'pydub', 'imageio_ffmpeg'],
+    noarchive=False, optimize=1)
+pyz = PYZ(a.pure)
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='DialogueTTSService', debug=False,
+    bootloader_ignore_signals=False, strip=False, upx=False, console=True,
+    disable_windowed_traceback=False, argv_emulation=False, target_arch='arm64', codesign_identity=None, entitlements_file=None)
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='DialogueTTSService')
+app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.github.Harry6400.dialoguetts',
+    info_plist={{'CFBundleDisplayName':'对白', 'CFBundleShortVersionString':'0.1.0', 'CFBundleVersion':'1',
+    'LSMinimumSystemVersion':'12.0', 'NSHighResolutionCapable':True, 'LSApplicationCategoryType':'public.app-category.utilities'}})
+''', encoding='utf-8')
+    env = dict(os.environ, PYINSTALLER_CONFIG_DIR=str(work / 'cache'))
+    subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--distpath', str(out),
+                    '--workpath', str(work / 'pyinstaller'), str(spec)], cwd=ROOT, env=env, check=True)
+    app = out / '对白.app'
+    executable = app / 'Contents' / 'MacOS' / 'DialogueTTS'
+    subprocess.run(['/usr/bin/swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macosx12.0',
+                    '-module-cache-path', str(work / 'swift-cache'), str(ROOT / 'native_macos' / 'App.swift'),
+                    '-o', str(executable)], check=True)
+    plist_path = app / 'Contents' / 'Info.plist'
+    with plist_path.open('rb') as stream:
+        info = plistlib.load(stream)
+    info['CFBundleExecutable'] = 'DialogueTTS'
+    info['CFBundleName'] = '对白'
+    info['NSAppTransportSecurity'] = {'NSAllowsLocalNetworking': True}
+    with plist_path.open('wb') as stream:
+        plistlib.dump(info, stream)
+    # The former bundle entry point's signature included the old Info.plist.
+    subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', '--identifier',
+                    'io.github.Harry6400.dialoguetts.service',
+                    str(app / 'Contents' / 'MacOS' / 'DialogueTTSService')], check=True)
+    subprocess.run(['/usr/bin/codesign', '--force', '--sign', '-', str(app)], check=True)
+    subprocess.run(['/usr/bin/plutil', '-lint', str(plist_path)], check=True)
+    subprocess.run(['/usr/bin/codesign', '--verify', '--deep', '--strict', str(app)], check=True)
+    architecture = subprocess.check_output(['/usr/bin/file', '-b', str(executable)], text=True).strip()
+    if 'arm64' not in architecture:
+        raise RuntimeError('Unexpected app architecture: ' + architecture)
+    stage = out / 'DialogueTTS-macOS-arm64'
+    stage.mkdir(exist_ok=True)
+    target = stage / app.name
+    if target.exists():
+        raise RuntimeError('Distribution already contains an app; use a fresh output directory.')
+    shutil.copytree(app, target, symlinks=True)
+    for name in ('LICENSE', 'NOTICE'):
+        shutil.copyfile(ROOT / name, stage / name)
+    (stage / '开始使用.txt').write_text(
+        '对白 · Mac Apple Silicon 版（macOS 12 或更新）\n\n双击“对白.app”，会打开应用自己的窗口。\n'
+        '导入一个 JSON，或同时选择同一通对话的两个 XML，先解析预览，再选择声音并生成 MP3。\n'
+        '生成语音需要联网；无需安装 Python、FFmpeg、模型或配置后端。原文件保持不变。\n'
+        '关窗或点击“退出应用”会结束后台并清理临时音频，请先保存需要的结果。\n'
+        '“检查更新”查找本项目的正式版本；获取更新会打开官方 GitHub 发布页。\n\n'
+        '界面使用系统 WKWebView，服务仅在本机临时端口运行，不是外部后端。\n'
+        '本包为本机构建，包含临时签名，未经过 Apple 开发者公证。\n'
+        '源码与重建说明见同目录 DialogueTTS-Source.zip。\n', encoding='utf-8')
+    roots = ['LICENSE', 'NOTICE', 'README.md', 'README_构建与许可.md', 'WINDOWS_开始使用.txt',
+             'mac_launcher.py', 'windows_launcher.py', 'requirements-windows-build.txt',
+             'web_dialogue', 'native_macos', 'examples', 'assets', 'third_party', 'tools', '.github/workflows']
+    with zipfile.ZipFile(stage / 'DialogueTTS-Source.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for name in roots:
+            item = ROOT / name
+            for file in ([item] if item.is_file() else sorted(item.rglob('*'))):
+                if file.is_file() and '__pycache__' not in file.parts and file.suffix != '.pyc':
+                    archive.write(file, 'DialogueTTS-Source/' + file.relative_to(ROOT).as_posix())
+    archive = out / 'DialogueTTS-macOS-arm64.zip'
+    subprocess.run(['/usr/bin/ditto', '-c', '-k', '--keepParent', str(stage), str(archive)], check=True)
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    (out / (archive.name + '.sha256')).write_text(digest + '  ' + archive.name + '\n', encoding='utf-8')
+    app_bytes = sum(file.stat().st_size for file in app.rglob('*') if file.is_file() and not file.is_symlink())
+    print(f'App: {app_bytes} bytes; zip: {archive.stat().st_size} bytes; SHA256: {digest}')
+
+
+if __name__ == '__main__':
+    main()

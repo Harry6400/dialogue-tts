@@ -75,3 +75,9 @@ python -m unittest discover -s web_dialogue -t . -p 'test_*.py' -v
 mutedSegments 时间区间重叠的段落不显示原文、不发送合成，预览为“已静音片段”并计数；不会恢复遮蔽文本。callInfo 电话、内部标识和其他分析字段不进入导出或TTS。合成按顺序串行，不能还原原录音的重叠说话或时长。
 
 DTD、实体、外部引用被拒绝；使用 defusedxml 0.7.1（PSF许可，见third_party）。examples中的两XML是完全虚构示例，不是真实录音转写。
+
+## Mac 原生窗口构建
+
+Mac 最终入口为 native_macos/App.swift，使用系统 AppKit / WKWebView 打开应用自己的窗口；mac_launcher.py 仅作为内置 Python 服务，不打开默认浏览器。后台只监听 127.0.0.1 随机端口，关窗时退出服务并清理任务。JSON/XML 选择、MP3 保存使用系统文件面板；应用内拒绝外域导航，官方 GitHub 更新页由系统浏览器打开。
+
+Apple Silicon、macOS 12 或更新版本，安装 Swift Command Line Tools。安装 web_dialogue/requirements.txt 和 PyInstaller 后运行 python tools/build_macos.py。脚本只构建并静态验证，不启动最终应用。分发包包含实际依赖许可证与可重建源码，无 FFmpeg、语音模型或 Chromium。

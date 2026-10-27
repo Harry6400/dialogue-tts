@@ -1,6 +1,7 @@
 """Read-only update discovery from this app's one fixed public repository."""
 import json
 import re
+import ssl
 import sys
 import urllib.error
 import urllib.parse
@@ -70,7 +71,10 @@ def check_update():
             "Accept": "application/vnd.github+json", "User-Agent": "DialogueTTS/" + CURRENT_VERSION,
             "X-GitHub-Api-Version": "2022-11-28",
         })
-        opener = urllib.request.build_opener(NoRedirect())
+        import certifi
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=certifi.where())
+        opener = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=context))
         with opener.open(request, timeout=8) as response:
             body = response.read(1024 * 1024 + 1)
             if len(body) > 1024 * 1024:

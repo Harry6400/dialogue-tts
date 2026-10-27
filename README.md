@@ -4,33 +4,28 @@
 
 ## 给使用者
 
-打开构建后的 Windows 应用或 Mac `.app` 即可。应用自动打开电脑的默认浏览器，后台只监听本机临时端口；不需要另配服务器、安装 Python、下载模型或安装 FFmpeg。
+打开构建后的 Windows 应用或 Mac `.app` 即可。Mac 版使用系统 WKWebView 打开应用自己的窗口，后台只监听本机临时端口；不需要另配服务器、安装 Python、下载模型或安装 FFmpeg。
 
 **音频由微软在线服务生成，仍然需要联网。** 只有确认发送后才将脱敏文本交给微软；预览不触达微软。原始 JSON 不写回、不改写，不克隆原录音中的真实声音。
 
-下载音频后，点击右上角“退出应用”结束后台并清理临时文件。仅关闭网页标签不会退出后台。
+下载音频后，点击右上角“退出应用”结束后台并清理临时文件。Mac 原生窗口关闭时也会退出后台。
 
 “检查更新”只读取 https://github.com/Harry6400/dialogue-tts 的正式 Release。发现新版后，“获取更新”打开本仓库官方发布页；下载对应系统版本、退出旧程序，再替换应用。不会后台执行下载内容，不会伪称已静默升级。
 
 ## 体积与依赖
 
 - 不包含语音模型、FFmpeg、pydub、numpy 或内置 Chromium。
-- 使用默认浏览器；Python 服务与必要库由构建器内置。
+- Mac 使用系统 WebKit，无需捆绑浏览器运行时；Python 服务与必要库由构建器内置。
 - Edge 固定格式 MP3 帧直接拼接，并插入自有静音样本。当前格式为 24kHz / 48kbps / mono MPEG2 Layer III。
 - 停顿按 24ms 帧取整，和设置值最多相差 12ms；网络服务格式变更时明确报错，不猜测拼接。
 
 ## 构建者
 
-Python 3.9+。Mac 入口 `mac_launcher.py`；Windows 构建由对应入口/工作流指定，两者共享 `web_dialogue/`。
+Python 3.9+。Mac 原生入口 `native_macos/App.swift`，内置服务入口 `mac_launcher.py`；Windows 构建由对应入口/工作流指定，两者共享 `web_dialogue/`。
 
 ```sh
 python -m pip install -r web_dialogue/requirements.txt pyinstaller
-python -m PyInstaller --noconfirm --onedir --windowed --name 'DialogueTTS' \
-  --add-data 'web_dialogue/index.html:web_dialogue' \
-  --add-data 'web_dialogue/silence.mp3:web_dialogue' \
-  --add-data 'third_party:third_party' \
-  --hidden-import web_dialogue.worker --hidden-import web_dialogue.mp3_frames \
-  --collect-all edge_tts --collect-all certifi mac_launcher.py
+python tools/build_macos.py
 ```
 
 请按实际平台调整资源分隔符与入口，不把示例命令当作已经执行的跨平台验证。冻结子进程通过 `--worker` 模式工作，无需系统 Python。保留系统可信 CA，再添加随包 certifi 根证书；不得跳过 TLS 验证。
