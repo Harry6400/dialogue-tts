@@ -15,7 +15,7 @@ def pyinstaller_command(source, out, work, version_resource):
                     '--specpath', str(work.parent), '--hidden-import', 'web_dialogue.worker',
                     '--hidden-import', 'web_dialogue.mp3_frames',
                     '--hidden-import', 'web_dialogue.updater_cli', '--hidden-import', 'web_dialogue.updater_bridge',
-                    '--hidden-import', 'web_dialogue.safe_updater', '--hidden-import', 'web_dialogue.update_helper',
+                    '--hidden-import', 'web_dialogue.safe_updater', '--hidden-import', 'web_dialogue.gitee_provider', '--hidden-import', 'web_dialogue.update_sources', '--hidden-import', 'web_dialogue.update_helper',
                     '--hidden-import', 'web_dialogue.install_lock', '--hidden-import', 'web_dialogue.update_cancel', '--hidden-import', 'native_windows_updater', '--collect-all', 'webview', '--collect-all', 'pythonnet',
                     '--hidden-import', 'clr_loader', '--exclude-module', 'PyQt5', '--exclude-module', 'PyQt6',
                     '--exclude-module', 'PySide2', '--exclude-module', 'PySide6', '--exclude-module', 'cefpython3', '--collect-data', 'certifi',

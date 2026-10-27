@@ -179,9 +179,19 @@ def validate_windows_version(path, version):
 def prepare(offer, stage, progress=None):
     stage=Path(stage);stage.mkdir(mode=0o700,parents=True,exist_ok=False)
     archive=stage/offer['archive']['name']; checksum=stage/offer['checksum']['name']
-    download(offer['archive'],archive,progress);download(offer['checksum'],checksum)
-    expected=offer['archive']['sha256']+'  '+offer['archive']['name']
-    if checksum.read_text('ascii').strip()!=expected: raise UpdateError('Checksum file disagrees with GitHub digest')
+    if offer.get('source')=='gitee':
+        from . import gitee_provider as g
+        try: g.download_verified(g.make_opener(),offer,archive,progress)
+        except g.NetworkError:
+            from .update_sources import matching_github
+            alternate=matching_github(offer)
+            download(alternate['archive'],archive,progress);download(alternate['checksum'],checksum)
+            expected=alternate['archive']['sha256']+'  '+alternate['archive']['name']
+            if checksum.read_text('ascii').strip()!=expected: raise UpdateError('Checksum file disagrees with GitHub digest')
+    else:
+        download(offer['archive'],archive,progress);download(offer['checksum'],checksum)
+        expected=offer['archive']['sha256']+'  '+offer['archive']['name']
+        if checksum.read_text('ascii').strip()!=expected: raise UpdateError('Checksum file disagrees with GitHub digest')
     payload=extract_safe(archive,stage/'extracted',offer['platform'])
     validate_payload(payload,offer['version'],offer['platform'])
     if offer['platform']=='darwin':
