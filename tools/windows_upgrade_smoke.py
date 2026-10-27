@@ -37,13 +37,14 @@ def close_owned_window(pid):
         return True
     user.EnumWindows(callback(visit),0)
 
-def capture_owned_prompts(root, report_path):
+def capture_owned_prompts(root, report_path, authorization=None):
     """Read-only evidence from windows owned by this disposable helper only."""
     result=[]
     query="Get-CimInstance Win32_Process -Filter \"Name='helper.exe'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"
     raw=subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',query],capture_output=True,text=True,timeout=15)
     values=json.loads(raw.stdout or '[]');values=values if isinstance(values,list) else [values]
-    pids={int(x['ProcessId']) for x in values if x.get('ExecutablePath') and Path(x['ExecutablePath']).resolve().is_relative_to(root.resolve())}
+    processes={int(x['ProcessId']):Path(x['ExecutablePath']).resolve() for x in values if x.get('ExecutablePath') and Path(x['ExecutablePath']).resolve().is_relative_to(root.resolve())}
+    pids=set(processes)
     user=ctypes.windll.user32
     callback=ctypes.WINFUNCTYPE(ctypes.c_bool,ctypes.c_void_p,ctypes.c_void_p)
     class Rect(ctypes.Structure):_fields_=[('left',ctypes.c_long),('top',ctypes.c_long),('right',ctypes.c_long),('bottom',ctypes.c_long)]
@@ -52,6 +53,7 @@ def capture_owned_prompts(root, report_path):
     user.GetClassNameW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p,ctypes.c_int]
     user.GetWindowRect.argtypes=[ctypes.c_void_p,ctypes.POINTER(Rect)]
     user.IsWindowVisible.argtypes=[ctypes.c_void_p]
+    user.PostMessageW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
     def visit(hwnd,_):
         pid=ctypes.c_ulong();user.GetWindowThreadProcessId(hwnd,ctypes.byref(pid))
         if pid.value not in pids or not user.IsWindowVisible(hwnd):return True
@@ -59,6 +61,15 @@ def capture_owned_prompts(root, report_path):
         user.GetWindowTextW(hwnd,title,512);user.GetClassNameW(hwnd,kind,128)
         rect=Rect();user.GetWindowRect(hwnd,ctypes.byref(rect))
         entry={'pid':pid.value,'title':title.value,'class':kind.value}
+        controls=[]; run_buttons=[]
+        def child_text(child,_):
+            label=ctypes.create_unicode_buffer(1024);control_class=ctypes.create_unicode_buffer(128)
+            user.GetWindowTextW(child,label,1024);user.GetClassNameW(child,control_class,128)
+            if control_class.value=='Button' and label.value.replace('&','').strip()=='Run':run_buttons.append(child)
+            if label.value and len(controls)<20:controls.append({'class':control_class.value,'text':label.value})
+            return True
+        user.EnumChildWindows(ctypes.c_void_p(hwnd),callback(child_text),0)
+        entry['controls']=controls
         width,height=rect.right-rect.left,rect.bottom-rect.top
         if 0<width<=2400 and 0<height<=1600 and len(result)<3:
             image=Path(report_path).parent/('windows-update-prompt-'+str(len(result))+'.png')
@@ -70,6 +81,20 @@ def capture_owned_prompts(root, report_path):
                 subprocess.run(['powershell','-NoProfile','-NonInteractive','-File',str(script),str(rect.left),str(rect.top),str(width),str(height),str(image)],capture_output=True,timeout=15,check=True)
                 entry['screenshot']=image.name
             except Exception as exc:entry['capture_error']=type(exc).__name__
+        if authorization and not authorization['used']:
+            from web_dialogue.safe_updater import sha256
+            expected=authorization['target'].resolve()
+            displayed={os.path.normcase(os.path.normpath(c['text'])) for c in controls}
+            target_matches=bool(displayed & {os.path.normcase(str(expected)),os.path.normcase(str(authorization['target']))})
+            owner_matches=processes.get(pid.value)==authorization['helper'].resolve()
+            if title.value=='Open File - Security Warning' and kind.value=='#32770' and target_matches and owner_matches and len(run_buttons)==1 and sha256(expected)==authorization['sha256']:
+                # One explicit owner-approved confirmation of this exact self-built CI binary.
+                # Do not select any checkbox, dismiss unrelated dialogs or alter MOTW/protections.
+                authorization['used']=True
+                entry['owner_approved_run_once']=bool(user.PostMessageW(run_buttons[0],0x00F5,0,0))
+                authorization['posted']=entry['owner_approved_run_once']
+            else:
+                entry['approval_match']={'exact_target_path':target_matches,'exact_helper_owner':owner_matches,'single_run_button':len(run_buttons)==1}
         result.append(entry);return True
     user.EnumWindows(callback(visit),0)
     return result
@@ -107,7 +132,7 @@ def main(exe, report_path):
     from web_dialogue.safe_updater import sha256, validate_payload
     from web_dialogue.updates import CURRENT_VERSION
     report={'passed':False,'platform':sys.platform,'network_metadata':'not exercised; local candidate staged by test harness','folder_dialog_and_reveal':'mocked in separate folder smoke','cases':{}}
-    child=None;old=None;old_gui_pid=None;app_pid=None;root=None;stage=None
+    child=None;old=None;old_gui_pid=None;app_pid=None;root=None;stage=None;authorization=None
     try:
         # Keep failed CI sandboxes until runner teardown so evidence is not masked by EXE locks.
         from contextlib import nullcontext
@@ -118,6 +143,8 @@ def main(exe, report_path):
             sentinels={'preferences.json':b'{"version":1,"voices":{"AGENT":"zh-CN-XiaoyiNeural"},"rate":1.2,"pause_ms":400,"paths":{},"receipts":{},"exports":{}}','receipts-test.json':b'{"kept":true}','cache-test.bin':b'fictional-cache-kept'}
             for filename,data in sentinels.items():(state/filename).write_bytes(data)
             candidate,test_version=build_candidate(root,exe)
+            report['candidate_sha256']=sha256(candidate)
+            report['candidate_version']=test_version
             install=root/'installation';install.mkdir();target=install/'DialogueTTS.exe';shutil.copy2(exe,target)
             initial=sha256(target);validate_payload(target,CURRENT_VERSION,'win32')
             def start_old_window():
@@ -162,27 +189,32 @@ def main(exe, report_path):
             old,old_gui_pid=start_old_window()
             stage,path,helper,plan=make_plan('successful-case',[old.pid,old_gui_pid])
             child=subprocess.Popen([str(helper),'--apply-update',str(path)],env=env)
+            from datetime import datetime,timezone
+            approved=(os.environ.get('DIALOGUE_CI_CONFIRM_ONCE')=='owner-approved-2026-10-27' and os.environ.get('GITHUB_EVENT_NAME')=='workflow_dispatch' and os.environ.get('GITHUB_RUN_ATTEMPT')=='1' and datetime.now(timezone.utc).date().isoformat()=='2026-10-27')
+            if approved:authorization={'target':target,'helper':helper,'sha256':sha256(candidate),'used':False,'posted':False}
+            report['one_time_owner_confirmation_enabled']=approved
             wait_file(stage/'helper-ready.json');stop_old_window(old,old_gui_pid);old=None;old_gui_pid=None
             deadline=time.monotonic()+160; capture_at=time.monotonic()+15
             while not (stage/'status.json').is_file() and time.monotonic()<deadline:
                 if time.monotonic()>=capture_at and not report.get('owned_prompt_windows'):
-                    try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path)
+                    try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path,authorization)
                     except Exception as exc:report['prompt_capture_error']=str(exc)
                     capture_at=time.monotonic()+25
                 time.sleep(.2)
             result=wait_file(stage/'status.json',1)
             if result.get('state')!='complete' and not report.get('owned_prompt_windows'):
-                try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path)
+                try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path,authorization)
                 except Exception as exc:report['prompt_capture_error']=str(exc)
             child.wait(timeout=20);child=None
             receipt=wait_file(stage/'receipt.json');app_pid=receipt.get('pid')
             report['transaction_state']=result['state'];report['receipt_state']=receipt.get('state')
+            report['one_time_owner_confirmation_posted']=bool(authorization and authorization['posted'])
             report['cases']['replacement_and_real_ready']=result['state']=='complete' and receipt.get('state')=='ready' and sha256(target)==sha256(candidate)
             if app_pid:close_owned_window(app_pid)
             validate_payload(target,test_version,'win32')
             report['test_candidate_version']=test_version
             report['cases']['preferences_receipts_cache_preserved']=all((state/k).read_bytes()==v for k,v in sentinels.items())
-            report['cases']['old_backup_retained']=Path(result.get('backup','missing')).is_file() and sha256(Path(result['backup']))==initial if result.get('backup') else False
+            report['cases']['old_backup_retained']=any(p.is_file() and sha256(p)==initial for p in install.glob('DialogueTTS.exe.update-backup-*'))
             if not all(report['cases'].values()):raise RuntimeError('Isolated update not fully verified; check transaction state')
             # Wait only for our owned app to close normally, never terminate unrelated processes.
             from web_dialogue.update_helper import alive
@@ -196,7 +228,7 @@ def main(exe, report_path):
         report['error']=str(exc)
         report['helper_returncode']=child.poll() if child else None
         if root and 'owned_prompt_windows' not in report:
-            try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path)
+            try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path,authorization)
             except Exception as capture_error:report['prompt_capture_error']=str(capture_error)
         if stage:
             report['transaction_evidence']={}

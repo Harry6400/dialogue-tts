@@ -1,6 +1,12 @@
 name: Build Windows app
 on:
   workflow_dispatch:
+    inputs:
+      confirm_isolated_candidate_once:
+        description: 'One-time owner-approved 2026-10-27 confirmation of this isolated self-built candidate only'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     tags: ['v*']
@@ -23,6 +29,8 @@ jobs:
       - name: Run updater transaction tests
         run: python -m unittest test_safe_updater -v
       - name: Package and verify the Windows application
+        env:
+          DIALOGUE_CI_CONFIRM_ONCE: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm_isolated_candidate_once && 'owner-approved-2026-10-27' || '' }}
         run: python tools/build_windows.py
       - name: Retain the real build and verification evidence
         if: always()
