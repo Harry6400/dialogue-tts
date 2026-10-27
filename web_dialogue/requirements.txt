@@ -1,0 +1,4 @@
+# No models, pydub, FFmpeg, numpy, or desktop web engine required.
+edge-tts==7.3.1
+certifi>=2023.11.17
+defusedxml==0.7.1

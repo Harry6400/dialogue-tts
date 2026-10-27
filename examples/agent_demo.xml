@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<analyze>
+  <subject>
+    <function><text>可以，请问需要什么设备？</text><time>3000,5500</time><speed>null</speed></function>
+    <function><text>好的，我们会提前准备。</text><time>9000,11500</time><speed>null</speed></function>
+  </subject>
+  <keywordList/>
+  <callInfo><duration>12</duration><callReference>fictional-demo-001</callReference><role>AGENT</role></callInfo>
+</analyze>

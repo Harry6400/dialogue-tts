@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<analyze>
+  <subject>
+    <function><text>你好，我想预约会议室。</text><time>200,2800</time><speed>null</speed></function>
+    <function><text>需要投影设备，谢谢。</text><time>5200,7800</time><speed>null</speed></function>
+    <function><text>这是一句虚构的屏蔽段落。</text><time>8000,8500</time><speed>null</speed></function>
+  </subject>
+  <keywordList/>
+  <callInfo><duration>12</duration><callReference>fictional-demo-001</callReference><role>USER</role></callInfo>
+  <mutedSegments><muted start="8000" end="8500" reason="from_suspect">此处是虚构示例</muted></mutedSegments>
+</analyze>

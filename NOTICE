@@ -1,0 +1,24 @@
+DialogueTTS original application code is MIT licensed; see LICENSE.
+
+edge-tts 7.3.1: LGPLv3, except srt_composer.py which is MIT. See
+third_party/edge-tts-LICENSE.txt and third_party/GPL-3.0.txt.
+Official source: https://github.com/rany2/edge-tts
+PyPI version: https://pypi.org/project/edge-tts/7.3.1/
+Its copyright and license are not replaced by this project's MIT license.
+The complete original app source and build instructions are supplied so that
+users can modify or replace the LGPL component and rebuild the app. No rule
+prohibits reverse engineering for debugging changes to LGPL components.
+Distributors must retain applicable dependency licenses and corresponding
+source/rebuild information in binary releases.
+
+The minimal current app does not include MH.Tools.TtsAndSrtGenerate code,
+FFmpeg, pydub, speech models or an embedded Chromium runtime.
+The short silence.mp3 fixture was generated for this project, without recorded
+speech or third-party audio. Frame concatenation code is original app code.
+
+Other runtime dependencies (Python, aiohttp and dependencies, certifi,
+PyInstaller bootloader) retain their respective licenses. Binary builders
+must include notices from the exact installed dependency distributions.
+Code licenses do not grant rights to Microsoft's online speech service.
+
+defusedxml 0.7.1: Python Software Foundation License, see third_party/defusedxml-LICENSE.txt. Official source: https://github.com/tiran/defusedxml
