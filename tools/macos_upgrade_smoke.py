@@ -1,7 +1,7 @@
 """Opt-in local-candidate transaction; never targets an existing installation.
 
 Uses the real distribution ZIP, frozen helper, normal LaunchServices policy and
-nonce receipt. The old wait PID is an isolated process, not a live user app.
+nonce receipt. The old GUI is a dedicated candidate with test-only version metadata.
 Network release discovery is deliberately tested separately.
 """
 from pathlib import Path
@@ -9,6 +9,8 @@ import hashlib
 import json
 import os
 import plistlib
+import re
+import signal
 import secrets
 import shutil
 import subprocess
@@ -31,7 +33,7 @@ def main():
     archive = ROOT / 'dist/DialogueTTS-macOS-arm64.zip'
     with (ROOT / 'dist/对白.app/Contents/Info.plist').open('rb') as f:
         version = plistlib.load(f)['CFBundleShortVersionString']
-    report = {'scope': 'local candidate; real ZIP/helper/replacement/OS launch; isolated old wait process',
+    report = {'scope': 'local candidate; real ZIP/old native GUI/normal exit/helper/replacement/OS launch; test version metadata',
               'network_discovery': 'not exercised', 'candidate_sha256': sha256(archive), 'passed': False}
     try:
         target = root / 'installation/对白.app'; target.parent.mkdir()
@@ -51,12 +53,29 @@ def main():
         # Apply the production internet-origin marking; never clear quarantine.
         mark_macos_quarantine(updater.payload)
         updater.offer = {'version': version}; updater.state = {'state': 'prepared'}
-        old = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(10)'])
+        from web_dialogue.update_helper import launch_normal, alive
+        initial_stage = updater.root / secrets.token_hex(16); initial_stage.mkdir(mode=0o700)
+        initial_receipt = initial_stage / 'receipt.json'; initial_nonce = secrets.token_hex(32)
+        initial_receipt.write_text(json.dumps({'nonce': initial_nonce, 'state': 'waiting'}))
+        launch_normal(target, initial_receipt, initial_nonce, timeout=45)
+        def owned_pid(name):
+            expression = re.escape(str(target / 'Contents/MacOS' / name)) + '$'
+            pids = subprocess.check_output(['/usr/bin/pgrep', '-f', expression], text=True).split()
+            if len(pids) != 1: raise RuntimeError('Cannot identify unique owned test process')
+            return int(pids[0])
+        old_gui = owned_pid('DialogueTTS'); old_service = owned_pid('DialogueTTSService')
+        report['old_native_ready'] = True
         initial = sha256(target / 'Contents/MacOS/DialogueTTS')
-        result = updater.start_helper([old.pid])
+        result = updater.start_helper([old_gui, old_service])
         report['helper_ready'] = result['state'] == 'waiting_for_exit'
-        report['waits_for_old_pid'] = old.poll() is None and initial == sha256(target / 'Contents/MacOS/DialogueTTS')
-        old.wait(timeout=15)
+        report['waits_for_old_pid'] = alive(old_gui) and alive(old_service) and initial == sha256(target / 'Contents/MacOS/DialogueTTS')
+        # Matches the native update path: request normal service termination,
+        # then the shell exits through its delegate. Never force-kill an old PID.
+        os.kill(old_service, signal.SIGTERM)
+        exit_deadline = time.monotonic() + 15
+        while (alive(old_gui) or alive(old_service)) and time.monotonic() < exit_deadline: time.sleep(.1)
+        report['old_processes_exited_normally'] = not alive(old_gui) and not alive(old_service)
+        if not report['old_processes_exited_normally']: raise RuntimeError('Old native candidate did not exit normally')
         deadline = time.monotonic() + 120
         status = updater.stage / 'status.json'
         while not status.exists() and time.monotonic() < deadline: time.sleep(.2)
@@ -68,7 +87,7 @@ def main():
         report['installed_quarantine'] = subprocess.check_output(['/usr/bin/xattr', '-p', 'com.apple.quarantine', str(target)], text=True, timeout=10).strip()
         report['old_backup_retained'] = any(target.parent.glob(target.name + '.update-backup-*'))
         report['passed'] = (report['transaction'].get('state') == 'complete' and report.get('receipt_state') == 'ready'
-                            and report['helper_ready'] and report['waits_for_old_pid'] and report['preferences_and_records_preserved'] and report['old_backup_retained'] and bool(report['installed_quarantine']))
+                            and report['helper_ready'] and report['old_native_ready'] and report['old_processes_exited_normally'] and report['waits_for_old_pid'] and report['preferences_and_records_preserved'] and report['old_backup_retained'] and bool(report['installed_quarantine']))
         report['private_evidence'] = str(updater.stage.relative_to(ROOT))
     except Exception as exc:
         report['error'] = type(exc).__name__ + ': ' + str(exc)

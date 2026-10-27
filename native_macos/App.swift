@@ -425,7 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if updating || checkingClose { return .terminateCancel }
         if closing { return closeApproved ? .terminateNow : .terminateLater }
-        guard let process = service, process.isRunning else { return .terminateNow }
+        guard let process = service, process.isRunning else { closeApproved = true; closing = true; clearSaveState(); return .terminateNow }
         checkingClose = true
         var answered = false
         let finish: ([String: Any]?) -> Void = { [weak self] safety in
