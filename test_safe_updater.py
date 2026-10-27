@@ -166,3 +166,34 @@ class CancellationAndAliasTests(unittest.TestCase):
             with zipfile.ZipFile(zpath,'w') as z:z.writestr(prefix+'Versions/1/Python',b'ok');z.writestr(link,'Versions/1')
             app=extract_safe(zpath,alias/'extracted','darwin')
             self.assertTrue(app.is_relative_to(real.resolve()));self.assertEqual((app/'Current/Python').read_bytes(),b'ok')
+
+class BoundedShellTests(unittest.TestCase):
+    def test_blocked_shell_is_bounded_and_never_rolls_back(self):
+        import threading,time
+        from web_dialogue.update_helper import launch_normal,RecoveryRequired
+        release=threading.Event()
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);app=root/'DialogueTTS.exe';app.write_bytes(b'old');new=root/'new';new.write_bytes(b'new');receipt=root/'receipt.json';receipt.write_text(json.dumps({'nonce':'n','state':'waiting'}))
+            with patch('web_dialogue.update_helper.sys.platform','win32'),patch('web_dialogue.update_helper._windows_shell_open',side_effect=lambda *_:release.wait(2)):
+                started=time.monotonic()
+                try:
+                    with self.assertRaises(RecoveryRequired):replace_transaction(app,new,lambda target:launch_normal(target,receipt,'n',timeout=.03))
+                    self.assertLess(time.monotonic()-started,1)
+                    self.assertEqual(app.read_bytes(),b'new');self.assertEqual(len(list(root.glob('*.update-backup-*'))),1)
+                    self.assertEqual(json.loads((root/'launch.json').read_text())['state'],'needs_attention')
+                finally:release.set();time.sleep(.02)
+    def test_shell_explicit_rejection_is_error(self):
+        from web_dialogue.update_helper import launch_normal
+        with tempfile.TemporaryDirectory() as d:
+            receipt=Path(d)/'receipt.json';receipt.write_text('{}')
+            with patch('web_dialogue.update_helper.sys.platform','win32'),patch('web_dialogue.update_helper._windows_shell_open',side_effect=OSError('denied')):
+                with self.assertRaises(OSError):launch_normal(Path(d)/'app.exe',receipt,'n',timeout=.2)
+    def test_real_ready_receipt_wins_pending_shell(self):
+        import threading,time
+        from web_dialogue.update_helper import launch_normal
+        release=threading.Event()
+        with tempfile.TemporaryDirectory() as d:
+            receipt=Path(d)/'receipt.json';receipt.write_text(json.dumps({'nonce':'n','state':'ready'}))
+            with patch('web_dialogue.update_helper.sys.platform','win32'),patch('web_dialogue.update_helper._windows_shell_open',side_effect=lambda *_:release.wait(2)):
+                try:launch_normal(Path(d)/'app.exe',receipt,'n',timeout=.03)
+                finally:release.set();time.sleep(.02)

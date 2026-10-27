@@ -37,6 +37,44 @@ def close_owned_window(pid):
         return True
     user.EnumWindows(callback(visit),0)
 
+def capture_owned_prompts(root, report_path):
+    """Read-only evidence from windows owned by this disposable helper only."""
+    result=[]
+    query="Get-CimInstance Win32_Process -Filter \"Name='helper.exe'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"
+    raw=subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',query],capture_output=True,text=True,timeout=15)
+    values=json.loads(raw.stdout or '[]');values=values if isinstance(values,list) else [values]
+    pids={int(x['ProcessId']) for x in values if x.get('ExecutablePath') and Path(x['ExecutablePath']).resolve().is_relative_to(root.resolve())}
+    user=ctypes.windll.user32
+    callback=ctypes.WINFUNCTYPE(ctypes.c_bool,ctypes.c_void_p,ctypes.c_void_p)
+    class Rect(ctypes.Structure):_fields_=[('left',ctypes.c_long),('top',ctypes.c_long),('right',ctypes.c_long),('bottom',ctypes.c_long)]
+    user.GetWindowThreadProcessId.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_ulong)]
+    user.GetWindowTextW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p,ctypes.c_int]
+    user.GetClassNameW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p,ctypes.c_int]
+    user.GetWindowRect.argtypes=[ctypes.c_void_p,ctypes.POINTER(Rect)]
+    user.IsWindowVisible.argtypes=[ctypes.c_void_p]
+    def visit(hwnd,_):
+        pid=ctypes.c_ulong();user.GetWindowThreadProcessId(hwnd,ctypes.byref(pid))
+        if pid.value not in pids or not user.IsWindowVisible(hwnd):return True
+        title=ctypes.create_unicode_buffer(512);kind=ctypes.create_unicode_buffer(128)
+        user.GetWindowTextW(hwnd,title,512);user.GetClassNameW(hwnd,kind,128)
+        rect=Rect();user.GetWindowRect(hwnd,ctypes.byref(rect))
+        entry={'pid':pid.value,'title':title.value,'class':kind.value}
+        width,height=rect.right-rect.left,rect.bottom-rect.top
+        if 0<width<=2400 and 0<height<=1600 and len(result)<3:
+            image=Path(report_path).parent/('windows-update-prompt-'+str(len(result))+'.png')
+            # System.Drawing captures only this known test window, never user content.
+            command="Add-Type -AssemblyName System.Drawing; $b=New-Object System.Drawing.Bitmap -ArgumentList ([int]$args[2]),([int]$args[3]); $g=[Drawing.Graphics]::FromImage($b); $g.CopyFromScreen([int]$args[0],[int]$args[1],0,0,$b.Size); $b.Save($args[4],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()"
+            try:
+                # Script parameters are passed via a temporary script rather than shell interpolation.
+                script=root/'capture-owned-window.ps1';script.write_text(command)
+                subprocess.run(['powershell','-NoProfile','-NonInteractive','-File',str(script),str(rect.left),str(rect.top),str(width),str(height),str(image)],capture_output=True,timeout=15,check=True)
+                entry['screenshot']=image.name
+            except Exception as exc:entry['capture_error']=type(exc).__name__
+        result.append(entry);return True
+    user.EnumWindows(callback(visit),0)
+    return result
+
+
 def build_candidate(root, exe):
     source=root/'candidate-source';source.mkdir()
     # Explicit source types only; never copy .git, credentials, state or prior evidence.
@@ -125,7 +163,18 @@ def main(exe, report_path):
             stage,path,helper,plan=make_plan('successful-case',[old.pid,old_gui_pid])
             child=subprocess.Popen([str(helper),'--apply-update',str(path)],env=env)
             wait_file(stage/'helper-ready.json');stop_old_window(old,old_gui_pid);old=None;old_gui_pid=None
-            result=wait_file(stage/'status.json',115);child.wait(timeout=20);child=None
+            deadline=time.monotonic()+160; capture_at=time.monotonic()+15
+            while not (stage/'status.json').is_file() and time.monotonic()<deadline:
+                if time.monotonic()>=capture_at and not report.get('owned_prompt_windows'):
+                    try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path)
+                    except Exception as exc:report['prompt_capture_error']=str(exc)
+                    capture_at=time.monotonic()+25
+                time.sleep(.2)
+            result=wait_file(stage/'status.json',1)
+            if result.get('state')!='complete' and not report.get('owned_prompt_windows'):
+                try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path)
+                except Exception as exc:report['prompt_capture_error']=str(exc)
+            child.wait(timeout=20);child=None
             receipt=wait_file(stage/'receipt.json');app_pid=receipt.get('pid')
             report['transaction_state']=result['state'];report['receipt_state']=receipt.get('state')
             report['cases']['replacement_and_real_ready']=result['state']=='complete' and receipt.get('state')=='ready' and sha256(target)==sha256(candidate)
@@ -146,9 +195,12 @@ def main(exe, report_path):
     except Exception as exc:
         report['error']=str(exc)
         report['helper_returncode']=child.poll() if child else None
+        if root and 'owned_prompt_windows' not in report:
+            try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path)
+            except Exception as capture_error:report['prompt_capture_error']=str(capture_error)
         if stage:
             report['transaction_evidence']={}
-            for name in ('plan.json','helper-ready.json','receipt.json','status.json'):
+            for name in ('plan.json','helper-ready.json','receipt.json','status.json','launch.json'):
                 file=stage/name
                 if file.is_file():
                     try:
