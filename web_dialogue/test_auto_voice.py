@@ -33,3 +33,12 @@ class InvalidVoiceTests(unittest.TestCase):
             batch=preview_batch({'files':payload['xml_files'], 'voices':{'USER':bad}, 'auto_voice':True})
             self.assertEqual(batch['groups'][0]['status'],'error')
             self.assertIn('音色无效',batch['groups'][0]['error'])
+
+class NamedAddressTests(unittest.TestCase):
+    def test_named_address_changes_final_voice_and_fingerprint(self):
+        base={'format':'xml_pair','xml_files':[f(xml('AGENT',text='张先生您好')),f(xml('USER'))], 'auto_voice':True}
+        automatic=normalize(base)
+        self.assertEqual(automatic['voice_choice']['user'],'zh-CN-YunxiNeural')
+        manual=normalize({**base,'manual_user_voice':True,'voices':{'USER':'zh-CN-XiaoyiNeural'}})
+        self.assertEqual(manual['voice_choice']['user'],'zh-CN-XiaoyiNeural')
+        self.assertNotEqual(automatic['fingerprint'],manual['fingerprint'])
