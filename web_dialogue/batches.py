@@ -63,7 +63,7 @@ class Batches:
             excluded = payload.get('excluded', [])
             if not isinstance(excluded, list) or any(not isinstance(x, str) for x in excluded):
                 raise InputError('排除列表无效。')
-            groups = [g for g in preview['groups'] if g['id'] not in excluded]
+            groups = [g for g in preview['groups'] if g['id'] not in excluded and g['status'] == 'ready']
             if not groups or len(groups) > MAX_CALLS:
                 raise InputError('每批请选择 1–50 通对话。')
             if any(g['status'] != 'ready' for g in groups):
@@ -90,7 +90,7 @@ class Batches:
             self.items[ident] = {'id': ident, 'status': 'queued', 'cancel': False, 'generation': 0,
                 'items': [{'id': g['id'], 'name': g['name'], 'status': 'queued',
                     'completed': 0, 'total': len(g['preview']['script']['lines']),
-                    'fingerprint': g['fingerprint'], 'script': g['preview']['script'], 'number': preview['groups'].index(g) + 1} for i,g in enumerate(groups)]}
+                    'fingerprint': g['fingerprint'], 'filename': g['filename'], 'script': g['preview']['script'], 'number': preview['groups'].index(g) + 1} for i,g in enumerate(groups)]}
             self.requests[request] = (ident, digest)
             self._launch(ident)
             return self.snapshot(ident)
@@ -120,7 +120,7 @@ class Batches:
                         continue
                     row['status'] = 'running'
                 try:
-                    job = self.jobs.start(row['script'], batch_owner=ident, fingerprint=row['fingerprint'])
+                    job = self.jobs.start(row['script'], batch_owner=ident, fingerprint=row['fingerprint'], filename=row['filename'])
                     with self.lock:
                         row['job'] = job['id']
                     while True:
@@ -171,11 +171,10 @@ class Batches:
             batch = self.items[ident]
             rows = []
             for r in batch['items']:
-                out = {k:r[k] for k in ('id','name','status','completed','total','fingerprint')}
+                out = {k:r[k] for k in ('id','name','status','completed','total','fingerprint','filename')}
                 if r.get('error'): out['error'] = r['error']
                 if r['status'] == 'done':
                     out['download_url'] = f'/api/batches/{ident}/audio/{r["number"]:03d}'
-                    out['filename'] = f'dialogue-{r["number"]:03d}.mp3'
                 rows.append(out)
             result = {'id':ident, 'status':batch['status'], 'items':rows,
                       'completed':sum(r['status'] == 'done' for r in rows), 'total':len(rows)}
@@ -227,7 +226,7 @@ class Batches:
             with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_STORED) as archive:
                 for row in batch['items']:
                     if row['status'] == 'done':
-                        archive.write(self.root / ident / f'{row["number"]:03d}.mp3', f'dialogue-{row["number"]:03d}.mp3')
+                        archive.write(self.root / ident / f'{row["number"]:03d}.mp3', row['filename'])
             return target
 
     def open_output(self, ident, number=None):
@@ -235,7 +234,8 @@ class Batches:
             target = self.output(ident, number)
             handle = target.open('rb')
             self.leases[target] = self.leases.get(target, 0) + 1
-            return DownloadLease(self, target, handle), ('dialogues.zip' if number is None else f'dialogue-{number}.mp3'), target.stat().st_size
+            name = 'dialogues.zip' if number is None else next(r['filename'] for r in self.items[ident]['items'] if f"{r['number']:03d}" == number)
+            return DownloadLease(self, target, handle), name, target.stat().st_size
 
     def _reap_retired(self):
         for folder in self.retired[:]:

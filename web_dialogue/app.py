@@ -23,7 +23,13 @@ from .xml_example import XML_EXAMPLE
 def normalize_source(payload, catalog=None):
     if not isinstance(payload, dict) or payload.get("format") != "xml_pair" or "data" in payload:
         raise InputError("仅支持双声道 XML 输入。")
-    return normalize(payload, catalog)
+    result = normalize(payload, catalog)
+    from .output_names import pair_filename
+    try:
+        result['filename'] = pair_filename(payload['xml_files'])
+    except ValueError as exc:
+        raise InputError(str(exc)) from exc
+    return result
 
 def audition_script(payload, catalog=None):
     if payload.get("consent") is not True:
@@ -48,7 +54,12 @@ class Jobs:
         self.items = {}
         self.lock = threading.RLock()
 
-    def start(self, script, request_id=None, batch_owner=None, fingerprint=None, audition=False):
+    def start(self, script, request_id=None, batch_owner=None, fingerprint=None, audition=False, filename='audition.mp3'):
+        import hashlib
+        from .output_names import valid_output_name
+        if not audition and not valid_output_name(filename):
+            raise InputError('输出文件名无效。')
+        binding = hashlib.sha256(json.dumps([script, fingerprint, filename, audition], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         with self.lock:
             if getattr(self, "batch_active", None) and batch_owner != self.batch_active:
                 raise InputError("已有批次正在合成，请等待完成或先取消。")
@@ -58,6 +69,8 @@ class Jobs:
                 if request_id in self.request_ids:
                     old_id = self.request_ids[request_id]
                     if old_id in self.items:
+                        if self.items[old_id]['request_binding'] != binding:
+                            raise InputError('同一请求标识的内容或文件名发生变化，请重新生成请求。')
                         return self.snapshot(old_id)
             for ident in self.items:
                 if self.snapshot(ident)["status"] in {"queued", "running"}:
@@ -85,7 +98,7 @@ class Jobs:
             finally:
                 log.close()
             self.items[ident] = {"folder": folder, "process": process, "total": len(script["lines"]),
-                                 "fingerprint": fingerprint, "audition": audition, "started": time.monotonic(), "cancelled": False, "timed_out": False}
+                                 "fingerprint": fingerprint, "filename": filename, "request_binding": binding, "audition": audition, "started": time.monotonic(), "cancelled": False, "timed_out": False}
             timer = threading.Timer(self.timeout_seconds, self.expire, args=(ident,))
             timer.daemon = True
             self.items[ident]["timer"] = timer
@@ -134,7 +147,7 @@ class Jobs:
             if ident not in self.items:
                 raise KeyError("任务不存在，或服务器已重启。")
             item = self.items[ident]
-            result = {"id": ident, "status": "queued", "completed": 0, "total": item["total"]}
+            result = {"id": ident, "status": "queued", "completed": 0, "total": item["total"], "filename": item['filename']}
             status_file = item["folder"] / "worker_status.json"
             if status_file.exists():
                 try:
@@ -296,7 +309,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Accept-Ranges", "bytes")
                 if parts[3] == "audio" and status.get("fingerprint"):
                     self.send_header("X-Dialogue-Fingerprint", status["fingerprint"])
-                self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+                download_name = self.server.jobs.items[parts[2]]['filename'] if parts[3] == 'audio' else filename
+                self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
                 if http_status == 206:
                     self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
                 self.end_headers()
@@ -380,7 +394,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(payload, dict) or payload.get("consent") is not True:
                     raise InputError("请先确认：生成时会将脱敏后的文本发送至微软语音服务。")
                 normalized = normalize_source(payload, self.server.voice_catalog["voices"])
-                return self.json(self.server.jobs.start(normalized["script"], payload.get("request_id"), fingerprint=normalized["fingerprint"]), 202)
+                return self.json(self.server.jobs.start(normalized["script"], payload.get("request_id"), fingerprint=normalized["fingerprint"], filename=normalized['filename']), 202)
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "cancel":
                 return self.json(self.server.jobs.cancel(parts[2]))

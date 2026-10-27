@@ -22,7 +22,7 @@ class FolderTests(unittest.TestCase):
     def tearDown(self):self.temp.cleanup()
     def response(self, fp='a'*64):
         data=(Path(__file__).parent/'silence.mp3').read_bytes()
-        r=io.BytesIO(data);r.headers=Message();r.headers['Content-Length']=str(len(data));r.headers['Content-Type']='audio/mpeg';r.headers['X-Dialogue-Fingerprint']=fp
+        r=io.BytesIO(data);r.headers=Message();r.headers['Content-Length']=str(len(data));r.headers['Content-Type']='audio/mpeg';r.headers['X-Dialogue-Fingerprint']=fp;r.headers['Content-Disposition']='attachment; filename="001.mp3"'
         return r
     def save(self,route=None,fp='a'*64):
         with patch('native_windows_folders.urllib.request.build_opener') as op:
@@ -91,16 +91,20 @@ class FolderTests(unittest.TestCase):
         self.assertFalse(self.host.set_preferences({'theme': 'invalid'})['ok'])
         self.assertEqual(Host(self.root).get_preferences()['theme'], 'dark')
     def test_save_idempotent_collision_receipt_restart_delete_and_change(self):
-        (self.output/'dialogue.mp3').write_bytes(b'unrelated')
-        first=self.save();self.assertTrue(first['ok'], first);self.assertEqual(first['name'],'dialogue (1).mp3')
-        again=self.save();self.assertEqual(again['path'],first['path']);self.assertEqual(len(list(self.output.iterdir())),2)
-        second=self.save('/api/jobs/'+'c'*32+'/audio');self.assertTrue(second['ok']);self.assertNotEqual(first['path'],second['path'])
+        target=self.output/'001.mp3';target.write_bytes(b'unrelated')
+        first=self.save();self.assertFalse(first['ok']);self.assertTrue(first['conflict'])
+        self.assertEqual(target.read_bytes(),b'unrelated');target.unlink()
+        first=self.save();self.assertTrue(first['ok'],first);self.assertEqual(first['name'],'001.mp3')
+        again=self.save();self.assertEqual(again['path'],first['path'])
+        second=self.save('/api/jobs/'+'c'*32+'/audio');self.assertTrue(second['ok']);self.assertEqual(first['path'],second['path'])
         restarted=Host(self.root);cap=restarted._authorize(self.output,'output')['folder_id']
-        self.assertEqual(len(restarted.check_completed(cap,['a'*64])['completed']),1)
-        Path(second['path']).write_bytes(b'changed')
-        self.assertEqual(restarted.check_completed(cap,['a'*64])['completed'],[])
-        Path(second['path']).unlink();self.assertEqual(restarted.check_completed(cap,['a'*64])['completed'],[])
-        self.assertEqual((self.output/'dialogue.mp3').read_bytes(),b'unrelated')
+        names={'a'*64:'001.mp3'}
+        self.assertEqual(len(restarted.check_completed(cap,['a'*64],names)['completed']),1)
+        target.write_bytes(b'changed')
+        checked=restarted.check_completed(cap,['a'*64],names)
+        self.assertEqual(checked['completed'],[]);self.assertEqual(len(checked['conflicts']),1)
+        target.unlink();self.assertEqual(restarted.check_completed(cap,['a'*64],names)['completed'],[])
+
     def test_new_fingerprint_and_bad_header(self):
         one=self.save();self.assertTrue(one['ok'])
         self.assertEqual(self.host.check_completed(self.out,['f'*64])['completed'],[])

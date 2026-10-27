@@ -11,6 +11,7 @@ import tempfile
 import threading
 import urllib.request
 import uuid
+from web_dialogue.output_names import valid_output_name
 
 MAX_AUDIO = 256 * 1024 * 1024
 VOICES = {'zh-CN-XiaoxiaoNeural','zh-CN-XiaoyiNeural','zh-CN-YunxiNeural','zh-CN-YunjianNeural','zh-CN-YunxiaNeural','zh-CN-YunyangNeural'}
@@ -185,7 +186,7 @@ class NativeFolderMixin:
         if not isinstance(record, dict): return None
         if not isinstance(record.get('fingerprint'),str) or not FP.fullmatch(record['fingerprint']): return None
         name = record.get('name')
-        if not isinstance(name,str) or not re.fullmatch(r'dialogue(?:-[0-9]{3})?(?: \([0-9]+\))?\.mp3', name): return None
+        if not isinstance(name,str) or not (valid_output_name(name) or re.fullmatch(r'dialogue(?:-[0-9]{3})?(?: \([0-9]+\))?\.mp3', name)): return None
         try:
             data = _read_regular(folder / name, MAX_AUDIO)
             if len(data) != record.get('size') or hashlib.sha256(data).hexdigest() != record.get('sha256'): return None
@@ -193,14 +194,20 @@ class NativeFolderMixin:
             return {'save_id':ident,'name':name,'path':str(folder / name),'fingerprint':record['fingerprint']}
         except (OSError,ValueError,KeyError): return None
 
-    def check_completed(self, folder_id, fingerprints):
+    def check_completed(self, folder_id, fingerprints, expected_names=None):
         try:
             if not isinstance(fingerprints,list) or len(fingerprints)>50 or any(not isinstance(f,str) or not FP.fullmatch(f) for f in fingerprints): raise ValueError('指纹无效')
+            if expected_names is not None and (not isinstance(expected_names,dict) or set(expected_names)!=set(fingerprints) or any(not valid_output_name(n) for n in expected_names.values())): raise ValueError('预期名称无效')
             with self._folder_lock:
                 folder = self._cap(folder_id,'output'); records = self._prefs['receipts'].get(str(folder), {})
                 if not isinstance(records, dict): records = {}
-                results = [self._receipt(folder, records.get(fp)) for fp in fingerprints]
-                return {'ok':True,'completed':[r for r in results if r]}
+                results, conflicts = [], []
+                for fp in fingerprints:
+                    record = self._receipt(folder, records.get(fp))
+                    name = expected_names.get(fp) if expected_names is not None else None
+                    if record and (name is None or record['name'] == name): results.append(record)
+                    elif name and os.path.lexists(folder / name): conflicts.append({'fingerprint':fp,'name':name,'error':'同名文件已存在且无法核实，请移动旧文件或选择其他目录。'})
+                return {'ok':True,'completed':results,'conflicts':conflicts}
         except (OSError,ValueError,TypeError): return {'ok':False,'error':'无法核对已有输出'}
 
     def save_to_output(self, resource_path, folder_id):
@@ -209,13 +216,21 @@ class NativeFolderMixin:
         try:
             with self._folder_lock:
                 folder = self._cap(folder_id,'output'); key = str(folder)+'|'+resource_path
-                prior = self._receipt(folder, self._prefs['exports'].get(key))
-                if prior: return {'ok':True, **prior}
                 class NoRedirect(urllib.request.HTTPRedirectHandler):
                     def redirect_request(self,*args,**kwargs): return None
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
                 with opener.open(self._base+resource_path,timeout=30) as response:
                     fp = response.headers.get('X-Dialogue-Fingerprint','')
+                    disposition = response.headers.get('Content-Disposition','')
+                    match = re.fullmatch(r'(?:attachment|inline); filename="([0-9]+\.mp3)"',disposition)
+                    if not match or not valid_output_name(match[1]): raise ValueError('输出名称无效')
+                    name = match[1]
+                    records = self._prefs['receipts'].get(str(folder),{})
+                    prior = self._receipt(folder, records.get(fp) if isinstance(records,dict) else None)
+                    if prior and prior['name'] == name:
+                        self._persist()
+                        return {'ok':True, **prior, 'resource_path':resource_path}
+                    if os.path.lexists(folder/name): return {'ok':False,'conflict':True,'error':'同名文件已存在且无法核实，请移动旧文件或选择其他目录后重试保存。'}
                     size = int(response.headers.get('Content-Length','-1'))
                     if not FP.fullmatch(fp) or response.headers.get_content_type() != 'audio/mpeg' or not 0<size<=MAX_AUDIO: raise ValueError('输出响应无效')
                     fd,temporary = tempfile.mkstemp(prefix='.dialogue-output-',dir=folder)
@@ -232,19 +247,15 @@ class NativeFolderMixin:
                 from web_dialogue.mp3_frames import parse_frames
                 if not parse_frames(Path(temporary).read_bytes()): raise ValueError('音频为空')
                 self._cap(folder_id,'output')
-                stem = 'dialogue-'+resource_path.rsplit('/',1)[1] if '/batches/' in resource_path else 'dialogue'
-                for n in range(10000):
-                    candidate = folder/(stem+('' if n==0 else f' ({n})')+'.mp3')
-                    try:
-                        # Exclusive creation works on NTFS and removable FAT/exFAT alike.
-                        # Until fsync + receipt, a partially written file is never considered completed.
-                        with candidate.open('xb') as output:
-                            target = candidate
-                            with open(temporary,'rb') as source: shutil.copyfileobj(source,output)
-                            output.flush(); os.fsync(output.fileno())
-                        break
-                    except FileExistsError: continue
-                if target is None: raise ValueError('同名文件过多')
+                candidate = folder/name
+                # Windows rename is atomic and fails if the destination exists.
+                # POSIX link has the same no-replace property for isolated tests.
+                try:
+                    if os.name == 'nt': os.rename(temporary,candidate); temporary=None
+                    else: os.link(temporary,candidate)
+                except FileExistsError:
+                    return {'ok':False,'conflict':True,'error':'保存时出现同名文件，请处理冲突后重试。'}
+                target = candidate
                 record = {'name':target.name,'size':size,'sha256':digest.hexdigest(),'fingerprint':fp}
                 receipts = self._prefs['receipts'].setdefault(str(folder),{})
                 if not isinstance(receipts,dict): receipts={}; self._prefs['receipts'][str(folder)]=receipts
@@ -252,9 +263,11 @@ class NativeFolderMixin:
                 # Bounded private receipt history; eviction only disables future skip, never deletes output.
                 while len(self._prefs['exports'])>2000: del self._prefs['exports'][next(iter(self._prefs['exports']))]
                 while len(receipts)>2000: del receipts[next(iter(receipts))]
-                self._persist(); recorded=True
+                recorded=True  # Publication is durable; never delete an output after a record write fails.
+                self._persist()
                 result=self._receipt(folder,record)
                 if not result: raise ValueError('保存后校验失败')
+                result['resource_path'] = resource_path
                 try: self._window.evaluate_js('window.dialogueNativeSaved && window.dialogueNativeSaved('+json.dumps(result,ensure_ascii=True)+')')
                 except Exception: pass
                 return {'ok':True,**result}

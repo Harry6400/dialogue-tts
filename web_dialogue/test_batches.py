@@ -13,7 +13,7 @@ class FakeJobs:
     def __init__(self):
         self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
         self.lock=threading.RLock(); self.items={}; self.calls=[]; self.fail={'bad'}; self.wait=False
-    def start(self, script, batch_owner=None, fingerprint=None):
+    def start(self, script, batch_owner=None, fingerprint=None, filename=None):
         ident=str(len(self.calls)); text=script['lines'][0]['text']; self.calls.append(text)
         folder=self.root/ident;folder.mkdir();(folder/'dialogue.mp3').write_bytes(b'fake-mp3')
         self.items[ident]={'folder':folder,'status':'running' if self.wait else ('error' if text in self.fail else 'done')}
@@ -26,7 +26,7 @@ class BatchTests(unittest.TestCase):
     def setUp(self): self.jobs=FakeJobs(); self.b=Batches(self.jobs)
     def tearDown(self): self.b.close();self.jobs.temp.cleanup()
     def payload(self, texts=('good','bad')):
-        return {'files':[f(xml(role, ref=f'fictional-{i}', text=t if role=='AGENT' else '答复'), f'../../source-{i}-{role}.xml') for i,t in enumerate(texts) for role in ('AGENT','USER')], 'consent':True,'request_id':'request-123'}
+        return {'files':[f(xml(role, ref=f'fictional-{i}', text=t if role=='AGENT' else '答复'), f'{i+1:03d}{0 if role=="AGENT" else 1}.xml') for i,t in enumerate(texts) for role in ('AGENT','USER')], 'consent':True,'request_id':'request-123'}
     def finish(self, ident):
         deadline=time.monotonic()+5
         while self.b.active and time.monotonic()<deadline: time.sleep(.01)
@@ -63,8 +63,8 @@ class BatchTests(unittest.TestCase):
     def test_zip_safe_and_audio_individual(self):
         ident=self.b.start(self.payload(('good','good')))['id'];self.finish(ident)
         with zipfile.ZipFile(self.b.output(ident)) as z:
-            self.assertEqual(z.namelist(),['dialogue-001.mp3','dialogue-002.mp3'])
-            self.assertEqual(z.read('dialogue-001.mp3'),b'fake-mp3')
+            self.assertEqual(z.namelist(),['001.mp3','002.mp3'])
+            self.assertEqual(z.read('001.mp3'),b'fake-mp3')
         self.assertEqual(self.b.output(ident,'001').read_bytes(),b'fake-mp3')
         with self.assertRaises(KeyError): self.b.output(ident,'../../secret')
     def test_zip_cached_and_open_snapshot_stable(self):
@@ -73,7 +73,7 @@ class BatchTests(unittest.TestCase):
         handle, name, size=self.b.open_output(ident)
         self.assertEqual(self.b.output(ident).stat().st_mtime_ns,before)
         with handle, zipfile.ZipFile(handle) as z:
-            self.assertEqual(z.namelist(),['dialogue-001.mp3'])
+            self.assertEqual(z.namelist(),['001.mp3'])
         self.jobs.fail.clear();self.b.retry(ident);self.finish(ident)
         with zipfile.ZipFile(self.b.output(ident)) as z:
             self.assertEqual(len(z.namelist()),2)
@@ -125,16 +125,15 @@ class BatchTests(unittest.TestCase):
         p=self.payload(('good','good'));p['excluded']=['g0_1']
         ident=self.b.start(p)['id'];result=self.finish(ident)
         self.assertEqual(result['items'][0]['name'],'对话002')
-        self.assertEqual(result['items'][0]['filename'],'dialogue-002.mp3')
+        self.assertEqual(result['items'][0]['filename'],'002.mp3')
         self.assertTrue(result['items'][0]['download_url'].endswith('/002'))
         handle,name,_=self.b.open_output(ident,'002');handle.close()
-        self.assertEqual(name,'dialogue-002.mp3')
-        with zipfile.ZipFile(self.b.output(ident)) as z:self.assertEqual(z.namelist(),['dialogue-002.mp3'])
+        self.assertEqual(name,'002.mp3')
+        with zipfile.ZipFile(self.b.output(ident)) as z:self.assertEqual(z.namelist(),['002.mp3'])
 
     def test_invalid_groups_exclusion(self):
         p=self.payload();p['files'][2]['content']='not xml'
-        with self.assertRaises(InputError):self.b.start(p)
-        p['excluded']=['g2','g3'];ident=self.b.start(p)['id']
+        ident=self.b.start(p)['id']
         self.assertEqual(self.finish(ident)['completed'],1)
     def test_parallel_batch_guard(self):
         self.jobs.wait=True;ident=self.b.start(self.payload())['id']

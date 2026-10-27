@@ -103,12 +103,14 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(start.call_args.kwargs['fingerprint'],fingerprint)
         with tempfile.TemporaryDirectory() as directory:
             folder=Path(directory);(folder/'dialogue.mp3').write_bytes(b'fake audio')
-            with patch.object(self.s.jobs, 'snapshot', return_value={'status':'done','fingerprint':fingerprint}), patch.dict(self.s.jobs.items, {'synthetic':{'folder':folder}}):
+            with patch.object(self.s.jobs, 'snapshot', return_value={'status':'done','fingerprint':fingerprint}), patch.dict(self.s.jobs.items, {'synthetic':{'folder':folder,'filename':'000123.mp3'}}):
                 status,_,headers=self.request('/api/jobs/synthetic/audio')
                 self.assertEqual(status,200);self.assertEqual(headers['X-Dialogue-Fingerprint'],fingerprint)
+                self.assertEqual(headers['Content-Disposition'],'attachment; filename="000123.mp3"')
                 status,_,headers=self.request('/api/jobs/synthetic/audio',headers={'Range':'bytes=0-3'})
                 self.assertEqual(status,206);self.assertEqual(headers['X-Dialogue-Fingerprint'],fingerprint)
-        with patch.object(self.s.batches,'open_output',return_value=(io.BytesIO(b'fake audio'),'dialogue-001.mp3',10)), patch.object(self.s.batches,'audio_fingerprint',return_value=fingerprint):
+                self.assertEqual(headers['Content-Disposition'],'attachment; filename="000123.mp3"')
+        with patch.object(self.s.batches,'open_output',return_value=(io.BytesIO(b'fake audio'),'000123.mp3',10)), patch.object(self.s.batches,'audio_fingerprint',return_value=fingerprint):
             status,_,headers=self.request('/api/batches/synthetic/audio/001')
             self.assertEqual(status,200);self.assertEqual(headers['X-Dialogue-Fingerprint'],fingerprint)
 

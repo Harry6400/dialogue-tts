@@ -204,7 +204,9 @@ def main(exe, report_path):
                 process=subprocess.Popen([str(target),'--update-receipt',str(receipt),nonce],env=env)
                 deadline=time.monotonic()+45
                 while time.monotonic()<deadline:
-                    data=json.loads(receipt.read_text())
+                    # Atomic receipt replacement can briefly share-lock the file
+                    # on Windows. Retry within the existing readiness deadline.
+                    data=wait_file(receipt,max(.1,deadline-time.monotonic()))
                     if data.get('state')=='ready':return process,data['pid']
                     if process.poll() is not None:raise RuntimeError('Old frozen app exited before readiness')
                     time.sleep(.2)

@@ -4,8 +4,14 @@ import UniformTypeIdentifiers
 import Darwin
 import CryptoKit
 
+// terminateLater runs a nested AppKit loop. Starting it inside a main-queue
+// block prevents the later main-queue reply from running until that block exits.
+func scheduleNativeTermination(_ action: @escaping () -> Void) {
+    RunLoop.main.perform(inModes: [.default], block: action)
+}
+
 // Only inspect the selected directory itself. Refuse oversized batches rather than truncating.
-enum SelectedXMLFolderError: Error { case tooManyFiles, fileTooLarge, totalTooLarge, unreadable, unsupportedLinks, linkFailed, namesExhausted }
+enum SelectedXMLFolderError: Error { case tooManyFiles, fileTooLarge, totalTooLarge, unreadable, unsupportedLinks, linkFailed, namesExhausted, nameConflict }
 
 func readSelectedXMLFolder(_ directory: URL) throws -> [[String: String]] {
     let manager = FileManager.default
@@ -150,12 +156,13 @@ final class FolderState {
             values["records"] = records + recovered
         }
     }
-    func completed(_ fingerprints: [String], directory: URL, registry: SavedDownloadRegistry) -> [[String: String]] {
+    func completed(_ fingerprints: [String], directory: URL, registry: SavedDownloadRegistry, expectedNames: [String: String]? = nil) -> [[String: String]] {
         recoverPending(directory)
         let wanted = Set(fingerprints)
         var found: [[String: String]] = []
         for record in records.reversed() {
             guard let fingerprint = record["fingerprint"] as? String, wanted.contains(fingerprint),
+                  expectedNames == nil || expectedNames?[fingerprint] == record["name"] as? String,
                   !found.contains(where: { $0["fingerprint"] == fingerprint }), let url = verified(record, directory: directory) else { continue }
             let id = registry.register(url)
             found.append(["fingerprint": fingerprint, "name": url.lastPathComponent, "path": url.path, "save_id": id])
@@ -170,7 +177,24 @@ final class FolderState {
         }
         return nil
     }
-    func save(_ data: Data, route: String, fingerprint: String, directory: URL, registry: SavedDownloadRegistry) throws -> [String: Any] {
+    static func validName(_ name: String) -> Bool { name.utf8.count <= 255 && name.range(of: "^[0-9]+\\.mp3$", options: .regularExpression) != nil }
+    func conflicts(_ names: [String: String], completed: [[String: String]], directory: URL) -> [[String: String]] {
+        let done = Set(completed.compactMap { $0["fingerprint"] })
+        let dir = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard dir >= 0 else { return names.map { ["fingerprint": $0.key, "name": $0.value, "error": "目录不可用"] } }; defer { close(dir) }
+        return names.compactMap { fp, name in
+            var info = stat()
+            guard !done.contains(fp), fstatat(dir, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { return nil }
+            return ["fingerprint": fp, "name": name, "error": "同名文件已存在且无法核实，请移动旧文件或选择其他目录。"]
+        }
+    }
+    func save(_ data: Data, route: String, fingerprint: String, filename: String, directory: URL, registry: SavedDownloadRegistry) throws -> [String: Any] {
+        guard Self.validName(filename) else { throw SelectedXMLFolderError.unreadable }
+        if let saved = completed([fingerprint], directory: directory, registry: registry, expectedNames: [fingerprint: filename]).first {
+            var result: [String: Any] = saved.mapValues { $0 as Any }
+            result["ok"] = true; result["resource_path"] = route
+            return result
+        }
         guard !data.isEmpty, data.count <= 256 * 1024 * 1024 else { throw SelectedXMLFolderError.fileTooLarge }
         let dir = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
         guard dir >= 0 else { throw SelectedXMLFolderError.unreadable }; defer { close(dir) }
@@ -201,17 +225,13 @@ final class FolderState {
             keepTemporary = false
         }
         do { try beforeLinkHook?() } catch { abandonUnpublished(); throw error }
-        var chosen: String?
-        for n in 1...10000 {
-            let name = n == 1 ? "对白.mp3" : "对白 (\(n)).mp3"
-            if linkat(dir, temporary, dir, name, 0) == 0 { chosen = name; break }
-            if errno != EEXIST {
-                let unsupported = errno == ENOTSUP || errno == ENOSYS
-                abandonUnpublished()
-                throw unsupported ? SelectedXMLFolderError.unsupportedLinks : SelectedXMLFolderError.linkFailed
-            }
+        let name = filename
+        guard linkat(dir, temporary, dir, name, 0) == 0 else {
+            let code = errno
+            abandonUnpublished()
+            if code == EEXIST { throw SelectedXMLFolderError.nameConflict }
+            throw code == ENOTSUP || code == ENOSYS ? SelectedXMLFolderError.unsupportedLinks : SelectedXMLFolderError.linkFailed
         }
-        guard let name = chosen else { abandonUnpublished(); throw SelectedXMLFolderError.namesExhausted }
         try afterLinkHook?()
         guard fsync(dir) == 0 else { throw SelectedXMLFolderError.unreadable }
         let record: [String: Any] = ["folder": directory.path, "route": route, "fingerprint": fingerprint, "name": name, "size": data.count, "sha256": Self.hash(data)]
@@ -387,14 +407,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             DispatchQueue.main.async {
                 guard let self = self, !self.closing else { return }
                 if self.baseURL == nil { self.showStartupError() }
-                NSApp.terminate(nil)
+                scheduleNativeTermination { NSApp.terminate(nil) }
             }
         }
-        do { try process.run() } catch { showStartupError(); NSApp.terminate(nil); return }
+        do { try process.run() } catch { showStartupError(); scheduleNativeTermination { NSApp.terminate(nil) }; return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
             guard let self = self, self.baseURL == nil, !self.closing else { return }
             self.showStartupError()
-            NSApp.terminate(nil)
+            scheduleNativeTermination { NSApp.terminate(nil) }
         }
     }
 
@@ -511,7 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             self?.notifyPage("dialogueNativeFolderResponse", payload: ["request_id": requestID, "result": result])
         }
         switch method {
-        case "request_close": reply(["ok": true]); DispatchQueue.main.async { NSApp.terminate(nil) }
+        case "request_close": reply(["ok": true]); scheduleNativeTermination { NSApp.terminate(nil) }
         case "get_preferences": reply(folderState.preferences())
         case "set_preferences":
             do { reply(try folderState.setPreferences(args) ? ["ok": true] : ["ok": false, "error": "设置无效"]) }
@@ -546,13 +566,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             guard let id = args["folder_id"] as? String, let url = folderState.folder(id, role: "output"),
                   let fingerprints = args["fingerprints"] as? [String], fingerprints.count <= 50,
                   fingerprints.allSatisfy({ $0.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil }) else { reply(["ok": false, "error": "完成记录请求无效"]); return }
-            reply(["ok": true, "completed": folderState.completed(fingerprints, directory: url, registry: savedDownloads)])
+            let names = args["expected_names"] as? [String: String]
+            guard args["expected_names"] == nil || (names != nil && Set(names!.keys) == Set(fingerprints) && names!.values.allSatisfy(FolderState.validName)) else { reply(["ok": false, "error": "预期名称无效"]); return }
+            let completed = folderState.completed(fingerprints, directory: url, registry: savedDownloads, expectedNames: names)
+            reply(["ok": true, "completed": completed, "conflicts": names.map { folderState.conflicts($0, completed: completed, directory: url) } ?? []])
         case "save_to_output":
             guard let id = args["folder_id"] as? String, let directory = folderState.folder(id, role: "output"),
                   let route = args["resource_path"] as? String, route.range(of: "^/api/(jobs/[a-zA-Z0-9_-]{1,100}/audio|batches/[a-zA-Z0-9_-]{1,100}/audio/[0-9]{3})$", options: .regularExpression) != nil,
                   let base = baseURL, let target = URL(string: route, relativeTo: base)?.absoluteURL, isLocal(target) else { reply(["ok": false, "error": "输出请求无效"]); return }
-            if let previous = folderState.prior(route, directory: directory, registry: savedDownloads) { reply(previous); return }
-            let key = id + "|" + route
+            performAudioSave(route, directory: directory, id: id, reply: reply)
+        case "save_download":
+            guard let route = args["resource_path"] as? String, route.range(of: "^/api/(jobs/[a-f0-9]{32}/audio|batches/[a-f0-9]{32}/audio/[0-9]{3})$", options: .regularExpression) != nil else { reply(["ok": false, "error": "输出请求无效"]); return }
+            let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+            panel.message = "选择保存文件夹；MP3 名称由两份 XML 确定。"
+            panel.beginSheetModal(for: window) { [weak self] response in
+                guard let self = self, !self.closing else { return }
+                guard response == .OK, let directory = panel.url else { reply(["cancelled": true]); return }
+                self.performAudioSave(route, directory: directory, id: nil, reply: reply)
+            }
+        case "reveal_output":
+            guard let id = args["folder_id"] as? String, let url = folderState.folder(id, role: "output") else { reply(["ok": false, "error": "文件夹授权无效"]); return }
+            reply(["ok": NSWorkspace.shared.open(url)])
+        default: reply(["ok": false, "error": "该功能尚未完成"])
+        }
+    }
+
+    private func performAudioSave(_ route: String, directory: URL, id: String?, reply: @escaping ([String: Any]) -> Void) {
+        guard let base = baseURL, let target = URL(string: route, relativeTo: base)?.absoluteURL, isLocal(target) else { reply(["ok": false, "error": "输出请求无效"]); return }
+            let key = directory.path + "|" + route
             if saveWaiters[key] != nil { saveWaiters[key]?.append(reply); return }
             saveWaiters[key] = [reply]
             let finish: ([String: Any]) -> Void = { [weak self] result in
@@ -567,19 +608,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                       response.statusCode == 200, response.mimeType == "audio/mpeg", response.expectedContentLength > 0,
                       response.expectedContentLength <= 256 * 1024 * 1024,
                       let fingerprint = response.value(forHTTPHeaderField: "X-Dialogue-Fingerprint"),
+                      let disposition = response.value(forHTTPHeaderField: "Content-Disposition"),
+                      disposition.hasPrefix("attachment; filename=\""), disposition.hasSuffix("\""),
+                      FolderState.validName(String(disposition.dropFirst(22).dropLast())),
                       fingerprint.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
                       let data = try? Data(contentsOf: location), data.count == response.expectedContentLength else {
                     DispatchQueue.main.async { finish(["ok": false, "error": "获取音频失败，请重试。 "]) }; return
                 }
                 DispatchQueue.main.async {
-                    guard let self = self, !self.closing, self.folderState.folder(id, role: "output") == directory else { finish(["ok": false, "error": "文件夹授权已失效"]); return }
+                    guard let self = self, !self.closing, (id == nil || self.folderState.folder(id!, role: "output") == directory) else { finish(["ok": false, "error": "文件夹授权已失效"]); return }
                     do {
-                        let saved = try self.folderState.save(data, route: route, fingerprint: fingerprint, directory: directory, registry: self.savedDownloads)
+                        let saved = try self.folderState.save(data, route: route, fingerprint: fingerprint, filename: String(disposition.dropFirst(22).dropLast()), directory: directory, registry: self.savedDownloads)
                         finish(saved)
                         if let warning = saved["warning"] as? String, let path = saved["path"] as? String {
                             let alert = NSAlert(); alert.messageText = "音频已保存"; alert.informativeText = warning + "\n" + path
                             alert.beginSheetModal(for: self.window)
                         }
+                    } catch SelectedXMLFolderError.nameConflict {
+                        finish(["ok": false, "conflict": true, "error": "同名文件已存在，请处理冲突或选择其他目录后重试保存。 "])
                     } catch SelectedXMLFolderError.unsupportedLinks {
                         finish(["ok": false, "error": "该文件系统不支持当前安全保存方式，请选择其他文件夹。"])
                         let alert = NSAlert(); alert.messageText = "无法保存到此文件夹"; alert.informativeText = "该文件系统不支持当前安全保存方式，请选择其他文件夹。"; alert.beginSheetModal(for: self.window)
@@ -592,11 +638,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                     } catch { finish(["ok": false, "error": "保存失败，请检查文件夹权限和剩余空间。 "]) }
                 }
             }.resume()
-        case "reveal_output":
-            guard let id = args["folder_id"] as? String, let url = folderState.folder(id, role: "output") else { reply(["ok": false, "error": "文件夹授权无效"]); return }
-            reply(["ok": NSWorkspace.shared.open(url)])
-        default: reply(["ok": false, "error": "该功能尚未完成"])
-        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
@@ -721,15 +762,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                             let deadline = Date().addingTimeInterval(6)
                             while runningService.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
                             DispatchQueue.main.async {
-                                if !runningService.isRunning { self.updating = false; NSApp.terminate(nil); return }
+                                if !runningService.isRunning { self.updating = false; scheduleNativeTermination { NSApp.terminate(nil) }; return }
                                 self.runUpdaterCLI(["--cancel-update", transaction, token], timeout: 15) { cancellation in
                                     guard cancellation["state"] as? String == "cancelled", cancellation["cancelled"] as? Bool == true else {
                                         self.showUpdateBlocked("无法确认撤销更新；请保持应用打开并联系支持。")
                                         return
                                     }
-                                    if !runningService.isRunning { self.updating = false; NSApp.terminate(nil); return }
+                                    if !runningService.isRunning { self.updating = false; scheduleNativeTermination { NSApp.terminate(nil) }; return }
                                     self.postUpdateLock(false) { unlocked in
-                                        if !runningService.isRunning { self.updating = false; NSApp.terminate(nil); return }
+                                        if !runningService.isRunning { self.updating = false; scheduleNativeTermination { NSApp.terminate(nil) }; return }
                                         guard unlocked else { self.showUpdateBlocked("更新已撤销，但任务锁尚未解除；请保持应用打开并联系支持。 "); return }
                                         self.updating = false
                                         self.webView.evaluateJavaScript("window.dialogueUpdateLock && window.dialogueUpdateLock(false); if (document.getElementById('updatestatus')) document.getElementById('updatestatus').textContent='旧服务未正常退出，更新已安全取消。'", completionHandler: nil)
@@ -806,6 +847,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let id = ObjectIdentifier(download)
         guard !closing, trustedDownloads.contains(id), let source = response.url, isLocal(source) else {
             completionHandler(nil)
+            return
+        }
+        if source.path.range(of: "^/api/(jobs/[a-f0-9]{32}/audio|batches/[a-f0-9]{32}/audio/[0-9]{3})$", options: .regularExpression) != nil {
+            completionHandler(nil)
+            trustedDownloads.remove(id); downloadSources.removeValue(forKey: id)
+            let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+            panel.beginSheetModal(for: window) { [weak self] result in
+                guard let self = self, !self.closing, result == .OK, let directory = panel.url else { return }
+                self.performAudioSave(source.path, directory: directory, id: nil) { result in
+                    if result["ok"] as? Bool == true { self.notifyPage("dialogueNativeSaved", payload: result.merging(["resource_path": source.path]) { _, new in new }) }
+                    else if let message = result["error"] as? String { let alert=NSAlert();alert.messageText=message;alert.beginSheetModal(for:self.window) }
+                }
+            }
             return
         }
         let panel = NSSavePanel()

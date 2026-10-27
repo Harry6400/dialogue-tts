@@ -23,8 +23,18 @@ class JobsTests(unittest.TestCase):
         return self.original_popen(*args, **kwargs)
     def tearDown(self):
         self.jobs.close(); self.patch.stop()
+    def start(self, *args, **kwargs):
+        return self.jobs.start(*args, filename='001.mp3', **kwargs)
+
+    def test_filename_is_bound_to_request_id(self):
+        first=self.jobs.start(self.script,'name-request',filename='000123.mp3')
+        self.assertEqual(first['filename'],'000123.mp3')
+        with self.assertRaises(InputError):self.jobs.start(self.script,'name-request',filename='000124.mp3')
+        self.assertEqual(len(self.jobs.items),1)
+        self.jobs.cancel(first['id'])
+
     def test_watchdog_without_polling(self):
-        job = self.jobs.start(self.script)
+        job = self.start(self.script)
         proc = self.jobs.items[job['id']]['process']
         deadline = time.monotonic() + 10
         while proc.poll() is None and time.monotonic() < deadline:
@@ -34,19 +44,19 @@ class JobsTests(unittest.TestCase):
         self.assertEqual(result['status'], 'error')
         self.assertIn('15 分钟', result['error'])
     def test_cancel_and_restart(self):
-        job = self.jobs.start(self.script)
+        job = self.start(self.script)
         self.assertEqual(self.jobs.cancel(job['id'])['status'], 'cancelled')
         self.assertIsNotNone(self.jobs.items[job['id']]['process'].poll())
-        next_job = self.jobs.start(self.script)
+        next_job = self.start(self.script)
         self.assertNotEqual(next_job['id'], job['id'])
         self.jobs.cancel(next_job['id'])
     def test_parallel_guard_and_idempotency(self):
-        a = self.jobs.start(self.script, 'request-123')
-        b = self.jobs.start(self.script, 'request-123')
+        a = self.start(self.script, 'request-123')
+        b = self.start(self.script, 'request-123')
         self.assertEqual(a['id'], b['id'])
-        with self.assertRaises(InputError): self.jobs.start(self.script)
+        with self.assertRaises(InputError): self.start(self.script)
         self.jobs.cancel(a['id'])
-        self.assertEqual(self.jobs.start(self.script, 'request-123')['id'], a['id'])
+        self.assertEqual(self.start(self.script, 'request-123')['id'], a['id'])
     def test_audition_uses_fixed_text_and_current_voices(self):
         payload = {'consent': True, 'voices': {'AGENT': 'zh-CN-YunxiNeural', 'USER': 'zh-CN-XiaoxiaoNeural'}, 'rate': 1.25, 'pause_ms': 500, 'data': 'private input'}
         sample = audition_script(payload)
@@ -60,13 +70,13 @@ class JobsTests(unittest.TestCase):
         script = audition_script({'consent': True, 'voices': voices})
         self.assertEqual({line['speaker']: line['voice'] for line in script['lines']}, voices)
     def test_auditions_do_not_evict_production_jobs(self):
-        production = self.jobs.start(self.script, fingerprint='a'*64)
+        production = self.start(self.script, fingerprint='a'*64)
         self.jobs.cancel(production['id'])
         for i in range(29):
-            other = self.jobs.start(self.script)
+            other = self.start(self.script)
             self.jobs.cancel(other['id'])
         for i in range(30):
-            sample = self.jobs.start(self.script, audition=True)
+            sample = self.start(self.script, audition=True)
             self.jobs.cancel(sample['id'])
         self.assertIn(production['id'], self.jobs.items)
         self.assertEqual(self.jobs.items[production['id']]['fingerprint'], 'a'*64)
@@ -75,10 +85,10 @@ class JobsTests(unittest.TestCase):
     def test_audition_history_does_not_reduce_production_capacity(self):
         ids = []
         for _ in range(27):
-            job = self.jobs.start(self.script); ids.append(job['id']); self.jobs.cancel(job['id'])
+            job = self.start(self.script); ids.append(job['id']); self.jobs.cancel(job['id'])
         for _ in range(3):
-            job = self.jobs.start(self.script, audition=True); self.jobs.cancel(job['id'])
-        job = self.jobs.start(self.script); self.jobs.cancel(job['id'])
+            job = self.start(self.script, audition=True); self.jobs.cancel(job['id'])
+        job = self.start(self.script); self.jobs.cancel(job['id'])
         self.assertTrue(all(ident in self.jobs.items for ident in ids))
         self.assertEqual(sum(not item.get('audition') for item in self.jobs.items.values()), 28)
     def test_bad_voice_type(self):
