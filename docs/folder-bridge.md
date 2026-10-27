@@ -6,8 +6,10 @@ Windows exposes Promise-returning `window.pywebview.api` methods below. macOS us
 
 | Method | Arguments | Result |
 |---|---|---|
+| `request_close` | none | `{ok}` requests the same guarded exit as native close/menu |
+| `check_output_space` | `folder_id` | `{ok,writable,free_bytes}`; a path string is not authorization |
 | `get_preferences` | none | `{ok, input_folder, output_folder, voices, rate, pause_ms}`; folder values are null or `{folder_id,path,valid}` |
-| `set_preferences` | `{voices, rate, pause_ms}` | `{ok}`; only supported four voice IDs, finite rate 0.5–2, integer pause_ms 0–3000 |
+| `set_preferences` | `{voices, rate, pause_ms}` | `{ok}`; only the six builtin zh-CN voice IDs, finite rate 0.5–2, integer pause_ms 0–3000 |
 | `choose_input_directory` | none | `{ok,folder_id,path,files:[{name,content}]}` |
 | `refresh_input_directory` | `folder_id` | same as input selection, on explicit click only |
 | `choose_output_directory` | none | `{ok,folder_id,path}` |
@@ -26,3 +28,9 @@ The frontend serializes exports and captures folder capability per job. Native a
 Controls remain locked while parsing, synthesis or export is in progress. Manual single-file save remains available as a fallback. Paths, voices and output records must stay on the user's machine and never be committed to the public repository.
 
 Persistent native preferences/cache belong in platform app-data, outside application bundles and release folders so replacing/updating the app preserves them. Restoring valid rate and pause only updates controls; no preview scan or TTS is triggered.
+
+## Normal exit and save ledger
+
+`window.dialogueCloseSafety()` returns boolean `busy,running,saving,pending,unsaved`. A missing or malformed result is unknown and blocks ordinary exit. `window.dialogueShowUnsaved()` exposes real generated-audio links. Native save/export receipts identify the actual resource route before clearing the unsaved ledger. Batch saves use the job's captured native capability, never the current mutable folder selection. Unsupported/failed/cancelled native operations cannot represent successful saves.
+
+macOS verification candidates may receive native process arguments `--verification-state ABSOLUTE_DIRECTORY`, using a separate preferences file. This is not a webpage method and grants no JS filesystem path authority. Normal launches continue to use platform app-data. For complete verification transactions, an explicit native OS environment `DIALOGUE_VERIFICATION_STATE_ROOT` selects the same private profile for preferences, helper plans and receipts; Python requires an absolute, non-symlink, current-user-owned directory with private permissions. The helper forwards only this explicit verification profile through LaunchServices. Normal launches do not set it.

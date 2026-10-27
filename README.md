@@ -6,11 +6,11 @@
 
 打开构建后的 Windows 应用或 Mac `.app` 即可。Mac 版使用系统 WKWebView 打开应用自己的窗口，后台只监听本机临时端口；不需要另配服务器、安装 Python、下载模型或安装 FFmpeg。
 
-**音频由微软在线服务生成，仍然需要联网。** 只有确认发送后才将脱敏文本交给微软；预览不触达微软。原始 XML 不写回、不改写，不克隆原录音中的真实声音。
+**音频由微软在线服务生成，仍然需要联网。** 只有确认发送后才将本次文本交给微软；用户需自行确认脱敏；预览不触达微软。原始 XML 不写回、不改写，不克隆原录音中的真实声音。
 
 下载音频后，点击右上角“退出应用”结束后台并清理临时文件。Mac 原生窗口关闭时也会退出后台。
 
-“检查更新”只读取 https://github.com/Harry6400/dialogue-tts 的正式 Release。发现新版后，“获取更新”打开本仓库官方发布页；下载对应系统版本、退出旧程序，再替换应用。不会后台执行下载内容，不会伪称已静默升级。
+“检查更新”优先使用 Gitee 国内分发源，网络故障时回退 GitHub。同一更新只接受选定版本、文件名、大小和 SHA-256 一致的附件；摘要、身份和 TLS 校验失败不会靠换源掩盖。下载和校验通过后，经确认正常退出、安装、重启并检查启动回执。系统安全确认仍需正常处理；启动状态未知时保留新旧副本并提示处理。当前分支尚未发布。Mac 已安装 v0.3.x 需首次手动安装未来的修复版本，之后再自动更新；旧 ZIP 和更新器问题详见 docs/PROJECT_STATUS.md。
 
 ## 体积与依赖
 
@@ -21,12 +21,25 @@
 
 ## 构建者
 
-Python 3.9+。Mac 原生入口 `native_macos/App.swift`，内置服务入口 `mac_launcher.py`；Windows 构建由对应入口/工作流指定，两者共享 `web_dialogue/`。
+Python 3.12，Node 22.x。使用项目虚拟环境和 npm workspace；Node 仅用于开发，正式应用仍加载 `web_dialogue/index.html`。`frontend` 是 React＋TypeScript＋Vite 准备工程，尚未替换正式页面。开发入口、规则和状态分别见 AGENTS.md、PRODUCT.md、docs/PROJECT_STATUS.md。
 
 ```sh
-python -m pip install -r web_dialogue/requirements.txt pyinstaller
-python tools/build_macos.py
+uv venv --python 3.12 .venv
+uv pip sync --python .venv/bin/python requirements-dev.lock
+npm ci
+.venv/bin/python tools/check.py
 ```
+
+Mac 构建需要 Swift 命令行工具：
+
+```sh
+uv pip sync --python .venv/bin/python requirements-macos-build.lock
+.venv/bin/python tools/build_macos.py
+```
+
+Windows 使用 `.venv\Scripts\python.exe`，依赖锁为 `requirements-windows-build.lock`，构建入口为 `tools/build_windows.py`。GitHub CI 同时运行 Mac/Windows 的离线检查及单独的 Windows 冻结构建和原生检查。
+
+开发准备页：分别运行 `.venv/bin/python -m web_dialogue.app --port 8877` 与 `npm run dev:frontend`，打开 Vite 显示的本机地址。准备页只在点击时读取真实配置，不自动导入、合成或保存。开发代理只指向固定本机端口；正式服务的 Host、Origin、令牌校验保持启用。端口占用时先检查服务所有者，不能关闭无关服务。
 
 请按实际平台调整资源分隔符与入口，不把示例命令当作已经执行的跨平台验证。冻结子进程通过 `--worker` 模式工作，无需系统 Python。保留系统可信 CA，再添加随包 certifi 根证书；不得跳过 TLS 验证。
 
@@ -34,7 +47,7 @@ python tools/build_macos.py
 
 ## 格式
 
-只接受 analyze / subject / function 结构的双声道 XML；text 为文本、time 为起止时间，callInfo/role 必须为 AGENT 或 USER。默认 AGENT 用晓晓、USER 用晓伊，均为普通话女声，可分别更改。没有字段映射或粘贴 JSON 入口。
+只接受 analyze / subject / function 结构的双声道 XML；text 为文本、time 为起止时间，callInfo/role 必须为 AGENT 或 USER。内置六种大陆普通话音色，启动不访问在线目录。客服默认晓晓、客户默认晓伊；默认根据明确称呼匹配客户声音，不明确或冲突时保留整体设置，逐通手动选择优先。旧外语音色需用户重新选择后才写回。没有字段映射或粘贴 JSON 入口。
 
 一次最多100段、总20000字符、每段5000字符。语速0.5–2倍，停顿0–3000ms。新音频与新时间轴不等于原录音时长/时间戳。
 
@@ -59,7 +72,7 @@ python -m unittest discover -s web_dialogue -t . -p 'test_*.py' -v
 源码 HTTP 合成、帧拼接、解码、输入/错误/取消/超时/更新逻辑均有测试。真实浏览器渲染及最终 Windows/Mac 程序是否已经验收，须以对应构建结果说明为准，不把源码测试等同成品启动成功。
 
 ## 双 XML 声道导入
-同时选择同一通对话的两份 XML。支持 analyze/subject/function 的 text 与 time，以及 callInfo/role 声道标记。按开始时间全局稳定排序，不会先读完一个文件再读另一个。此结构没有显式时间单位，默认毫秒并在预览中提示，可改成秒。
+同时选择同一通对话的两份 XML。支持 analyze/subject/function 的 text 与 time，以及 callInfo/role 声道标记。按开始时间全局稳定排序，不会先读完一个文件再读另一个。时间固定毫秒，同起点时客服在前，同角色保留原段落顺序；显式传入秒单位会报错。文件角色来自 XML，不需要交换 A/B。
 
 mutedSegments 时间区间重叠的段落不显示原文、不发送合成，预览为“已静音片段”并计数；不会恢复遮蔽文本。callInfo 电话、内部标识和其他分析字段不进入导出或TTS。合成按顺序串行，不能还原原录音的重叠说话或时长。
 
@@ -78,3 +91,9 @@ DTD、实体、外部引用被拒绝；使用 defusedxml 0.7.1（PSF许可，见
 选择“结果文件夹”后，每通成功音频会保存到那里；同名文件自动编号、不覆盖。保存失败可以单独“重试保存”，不必重新合成。程序会记住文件夹及音色，但下次打开只恢复显示，需点击刷新才读取文件。
 
 已经按相同文本和声音设置生成、且文件校验仍有效的通话默认跳过。需要再做一次时勾选“重新生成已完成的通话”。“生成完成”和“已保存”是两个独立状态；以界面显示的实际保存路径为准。
+
+## 保存与退出
+
+批量生成前必须通过原生面板选择有效结果文件夹，并完成可写性和空间检查。每通完成后自动保存，真实回执才显示已保存。保存失败保留临时音频，可重试保存而不重新合成；单通可生成后手动保存。更改参数或解析失败时保留上一份结果入口，并标明它对应旧设置。
+
+关窗、退出按钮和退出菜单共用任务与保存保护。保存中或状态未知时保持打开；未保存结果可返回保存、明确放弃或取消退出。临时结果不会在应用退出后长期保留。
