@@ -35,8 +35,11 @@ def sha256(path):
         for block in iter(lambda:f.read(1024*1024), b''): h.update(block)
     return h.hexdigest()
 
-def fetch_release():
-    req = urllib.request.Request(LATEST_API_URL, headers={'User-Agent':'DialogueTTS-Updater','Accept':'application/vnd.github+json'})
+def fetch_release(tag=None):
+    if tag is not None and (not isinstance(tag, str) or not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag)):
+        raise UpdateError('Invalid release tag')
+    url = LATEST_API_URL if tag is None else f'https://api.github.com/repos/{REPO}/releases/tags/{tag}'
+    req = urllib.request.Request(url, headers={'User-Agent':'DialogueTTS-Updater','Accept':'application/vnd.github+json'})
     # API must not redirect to arbitrary endpoints.
     from .updates import NoRedirect
     import certifi

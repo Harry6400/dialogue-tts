@@ -243,7 +243,7 @@ final class FolderState {
     }
     func setPreferences(_ args: [String: Any]) throws -> Bool {
         guard let voices = args["voices"] as? [String: String], voices.count <= 2,
-              Set(voices.keys).isSubset(of: ["AGENT", "USER"]), voices.values.allSatisfy({ $0.range(of: "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,16}){1,4}-[A-Za-z0-9]{1,50}Neural$", options: .regularExpression) != nil }),
+              Set(voices.keys).isSubset(of: ["AGENT", "USER"]), voices.values.allSatisfy({ allowedVoices.contains($0) }),
               let rate = args["rate"] as? Double, rate.isFinite, (0.5...2.0).contains(rate),
               let pause = args["pause_ms"] as? Int, (0...3000).contains(pause) else { return false }
         let theme = args["theme"] as? String ?? (values["theme"] as? String ?? "light")
@@ -300,11 +300,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var service: Process?
     private var baseURL: URL?
     private var closing = false
+    private var checkingClose = false
+    private var closeApproved = false
     private var updating = false
     private var offeredUpdate: String?
     private var offeredUpdateIdentity: String?
     private let savedDownloads = SavedDownloadRegistry()
-    private let folderState = FolderState()
+    private let folderState: FolderState = {
+        let args = CommandLine.arguments
+        if args.count == 3, args[1] == "--verification-state", args[2].hasPrefix("/") {
+            return FolderState(storeOverride: URL(fileURLWithPath: args[2]).appendingPathComponent("preferences.json"))
+        }
+        return FolderState()
+    }()
     private var downloadSources: [ObjectIdentifier: String] = [:]
     private var trustedDownloads = Set<ObjectIdentifier>()
     private var saveWaiters: [String: [([String: Any]) -> Void]] = [:]
@@ -395,7 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
-    func windowShouldClose(_ sender: NSWindow) -> Bool { !updating }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { if !updating { NSApp.terminate(nil) }; return false }
 
     func windowWillClose(_ notification: Notification) { clearSaveState() }
 
@@ -410,20 +418,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if updating { return .terminateCancel }
-        if closing { return .terminateLater }
-        closing = true
-        clearSaveState()
+        if updating || checkingClose { return .terminateCancel }
+        if closing { return closeApproved ? .terminateNow : .terminateLater }
         guard let process = service, process.isRunning else { return .terminateNow }
-        process.terminate()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let deadline = Date().addingTimeInterval(6)
-            while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            process.waitUntilExit()
-            DispatchQueue.main.async { NSApp.reply(toApplicationShouldTerminate: true) }
+        checkingClose = true
+        var answered = false
+        let finish: ([String: Any]?) -> Void = { [weak self] safety in
+            guard let self = self, !answered else { return }; answered = true
+            self.checkingClose = false
+            guard let safety = safety, safety["pending"] as? Bool == false,
+                  let running = safety["running"] as? Bool, let saving = safety["saving"] as? Bool,
+                  let unsaved = safety["unsaved"] as? Bool else {
+                let alert = NSAlert(); alert.messageText = "暂时无法确认任务和保存状态"
+                alert.informativeText = "请等待页面完成操作后再退出，已有结果保持可恢复。"; alert.runModal(); return
+            }
+            if saving || !self.trustedDownloads.isEmpty || !self.saveWaiters.isEmpty {
+                let alert = NSAlert(); alert.messageText = "正在保存音频"; alert.informativeText = "请等待保存完成后再退出。"; alert.runModal(); return
+            }
+            if unsaved {
+                let alert = NSAlert(); alert.messageText = "还有未保存的音频"
+                alert.informativeText = running ? "退出将停止正在合成的任务，并丢弃未保存的临时音频。" : "退出后，未保存的临时音频将被清理。"
+                alert.addButton(withTitle: "返回保存"); alert.addButton(withTitle: "放弃并退出"); alert.addButton(withTitle: "取消退出")
+                let answer = alert.runModal()
+                if answer == .alertFirstButtonReturn { self.webView.evaluateJavaScript("window.dialogueShowUnsaved && window.dialogueShowUnsaved()", completionHandler: nil); return }
+                guard answer == .alertSecondButtonReturn else { return }
+            } else if running {
+                let alert = NSAlert(); alert.messageText = "停止合成并退出？"; alert.informativeText = "正在运行的任务将停止。"
+                alert.addButton(withTitle: "停止并退出"); alert.addButton(withTitle: "取消退出")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+            }
+            self.closing = true
+            self.clearSaveState()
+            process.terminate()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let deadline = Date().addingTimeInterval(6)
+                while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                process.waitUntilExit()
+                DispatchQueue.main.async { self.closeApproved = true; NSApp.terminate(nil) }
+            }
         }
-        return .terminateLater
+        webView.evaluateJavaScript("window.dialogueCloseSafety && window.dialogueCloseSafety()") { result, error in
+            if error == nil, let state = result as? [String: Any] { finish(state) } else { finish(nil) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish(nil) }
+        // AppKit must continue processing the asynchronous page reply and native alert.
+        return .terminateCancel
     }
 
     private func isLocal(_ url: URL) -> Bool {
@@ -466,6 +506,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             self?.notifyPage("dialogueNativeFolderResponse", payload: ["request_id": requestID, "result": result])
         }
         switch method {
+        case "request_close": reply(["ok": true]); DispatchQueue.main.async { NSApp.terminate(nil) }
         case "get_preferences": reply(folderState.preferences())
         case "set_preferences":
             do { reply(try folderState.setPreferences(args) ? ["ok": true] : ["ok": false, "error": "设置无效"]) }

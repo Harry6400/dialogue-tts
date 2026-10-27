@@ -123,6 +123,8 @@ class NativeFolderMixin:
     def set_preferences(self, values):
         try:
             if not isinstance(values, dict) or set(values) - {'voices','rate','pause_ms','theme','auto_voice','manual_user_voice'}: raise ValueError('设置无效')
+            if 'voices' in values and (not isinstance(values['voices'], dict) or any(not isinstance(v, str) or v not in VOICES for v in values['voices'].values())):
+                raise ValueError('请重新选择内置普通话音色')
             with self._folder_lock:
                 merged = {**self._prefs, **values}; self._validate_settings(merged)
                 previous = self._prefs; self._prefs = merged

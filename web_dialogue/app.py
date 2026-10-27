@@ -397,7 +397,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"error": "无法创建临时文件或合成进程，请检查本机可用空间与权限。"}, 500)
 
 
-def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None):
+def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None, catalog=None):
     if access_key and (not access_key.isascii() or any(c.isspace() for c in access_key) or ":" in access_key):
         raise ValueError("专用访问密码必须为无空格的 ASCII 字符，不可包含冒号。")
     if bind not in {"127.0.0.1", "0.0.0.0"}:
@@ -421,7 +421,7 @@ def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None
     server.update_lock = threading.RLock()
     server.update_in_progress = False
     from .voice_catalog import load_catalog
-    server.voice_catalog = load_catalog()
+    server.voice_catalog = catalog if catalog is not None else load_catalog()
     server.jobs = Jobs()
     from .batches import Batches
     server.batches = Batches(server.jobs, server.voice_catalog["voices"])

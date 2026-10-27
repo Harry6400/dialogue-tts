@@ -24,8 +24,8 @@ class Integration(unittest.TestCase):
    self.assertEqual(s.discover('0.3.2','darwin')['state'],'latest');gh.assert_not_called()
  def test_exact_version_and_hash_binding(self):
   choice,_,_=sample(); alternate={**choice,'source':'github','archive':dict(choice['archive']),'checksum':dict(choice['checksum'])}
-  with patch.object(s,'fetch_release',return_value={}),patch.object(s,'release_offer',return_value=alternate):
-   self.assertEqual(s.matching_github(choice)['version'],'0.4.0')
+  with patch.object(s,'fetch_release',return_value={}) as fetch,patch.object(s,'release_offer',return_value=alternate):
+   self.assertEqual(s.matching_github(choice)['version'],'0.4.0');fetch.assert_called_once_with('v0.4.0')
    alternate['version']='0.5.0'
    with self.assertRaises(s.UpdateError):s.matching_github(choice)
    alternate['version']='0.4.0';alternate['archive']['sha256']='f'*64

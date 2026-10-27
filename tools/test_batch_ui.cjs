@@ -1,12 +1,12 @@
 // Run: NODE_PATH=/path/to/node_modules node tools/test_batch_ui.cjs (jsdom required).
 const {JSDOM}=require('jsdom');
 const fs=require('fs');const assert=require('assert');const html=fs.readFileSync(require('path').join(__dirname,'../web_dialogue/index.html'),'utf8');
-const dom=new JSDOM(html,{runScripts:'dangerously',url:'http://127.0.0.1:1234/',beforeParse(w){w.HTMLMediaElement.prototype.pause=()=>{};w.HTMLMediaElement.prototype.load=()=>{};w.fetch=async()=>({ok:true,json:async()=>({token:'x',xml_example:[{name:'agent.xml',content:'<analyze />'},{name:'user.xml',content:'<analyze />'}],voices:[{id:'zh-CN-XiaoxiaoNeural',label:'a'},{id:'zh-CN-XiaoyiNeural',label:'b'}]})});}});
+const dom=new JSDOM(html,{runScripts:'dangerously',url:'http://127.0.0.1:1234/',beforeParse(w){w.HTMLMediaElement.prototype.pause=()=>{};w.HTMLMediaElement.prototype.load=()=>{};w.fetch=async()=>({ok:true,json:async()=>({token:'x',xml_example:[{name:'agent.xml',content:'<analyze />'},{name:'user.xml',content:'<analyze />'}],voices:[{id:'zh-CN-XiaoxiaoNeural',label:'a',locale:'zh-CN'},{id:'zh-CN-XiaoyiNeural',label:'b',locale:'zh-CN'}]})});}});
 setTimeout(async()=>{
 const w=dom.window,d=w.document;
 w.eval(`batchFiles=[{name:'a.xml',content:'<analyze />'},{name:'b.xml',content:'<analyze />'}];setSourceMode('batch');renderBatchFiles();displayBatchPreview({groups:[{id:'a',name:'a',status:'ready',preview:{speakers:['A','B'],rows:[{speaker:'A',text:'你好'}],script:{lines:[{speaker:'A',text:'你好'}]}}},{id:'b',name:'b',status:'error',error:'字段缺失'}]});`);
 assert.equal(d.querySelectorAll('#preview .batchrow').length,2);assert.equal(d.querySelectorAll('#voices select').length,2);assert.equal(w.eval('lineCount()'),1);
-d.getElementById('consent').checked=true;w.eval('updateGenerate()');assert.equal(d.getElementById('generate').disabled,false);
+d.getElementById('consent').checked=true;w.eval('updateGenerate()');assert.equal(d.getElementById('generate').disabled,true);w.eval("outputFolder={folder_id:'fixture',path:'/fixture'};updateGenerate()");assert.equal(d.getElementById('generate').disabled,false);
 let cb=d.querySelector('#preview input');cb.checked=false;cb.dispatchEvent(new w.Event('change'));assert.equal(d.getElementById('generate').disabled,true);assert.deepEqual(JSON.parse(w.eval('JSON.stringify(sourcePayload().excluded)')),['a','b']);
 w.eval(`renderBatchStatus({id:'a',status:'done',completed:1,total:2,items:[{name:'../secret',status:'done',download_url:'/api/jobs/abc/audio'},{name:'bad',status:'error',error:'no'}],zip_url:'/api/batches/abc/zip'});`);
 assert.equal(d.getElementById('batchzip').hidden,false);assert.equal(d.getElementById('retrybatch').hidden,false);assert.equal(d.querySelectorAll('#batchresults a').length,1);
