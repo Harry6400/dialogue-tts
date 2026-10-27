@@ -37,13 +37,16 @@ def close_owned_window(pid):
         return True
     user.EnumWindows(callback(visit),0)
 
-def capture_owned_prompts(root, report_path, authorization=None):
-    """Read-only evidence from windows owned by this disposable helper only."""
+def capture_owned_prompts(root, report_path, authorization=None, *, process_name="helper.exe", target_path=None):
+    """Read-only evidence bound to the disposable helper or exact target exe."""
+    if process_name not in {"helper.exe","DialogueTTS.exe"}:raise ValueError("Unsupported test process")
+    if process_name != "helper.exe":authorization=None
     result=[]
-    query="Get-CimInstance Win32_Process -Filter \"Name='helper.exe'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"
+    query="Get-CimInstance Win32_Process -Filter \"Name='"+process_name+"'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"
     raw=subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',query],capture_output=True,text=True,timeout=15)
     values=json.loads(raw.stdout or '[]');values=values if isinstance(values,list) else [values]
     processes={int(x['ProcessId']):Path(x['ExecutablePath']).resolve() for x in values if x.get('ExecutablePath') and Path(x['ExecutablePath']).resolve().is_relative_to(root.resolve())}
+    if target_path is not None:processes={pid:path for pid,path in processes.items() if path==Path(target_path).resolve()}
     pids=set(processes)
     user=ctypes.windll.user32
     callback=ctypes.WINFUNCTYPE(ctypes.c_bool,ctypes.c_void_p,ctypes.c_void_p)
@@ -72,7 +75,7 @@ def capture_owned_prompts(root, report_path, authorization=None):
         entry['controls']=controls
         width,height=rect.right-rect.left,rect.bottom-rect.top
         if 0<width<=2400 and 0<height<=1600 and len(result)<3:
-            image=Path(report_path).parent/('windows-update-prompt-'+str(len(result))+'.png')
+            image=Path(report_path).parent/(('windows-update-target-' if process_name=='DialogueTTS.exe' else 'windows-update-prompt-')+str(len(result))+'.png')
             # System.Drawing captures only this known test window, never user content.
             command="Add-Type -AssemblyName System.Drawing; $b=New-Object System.Drawing.Bitmap -ArgumentList ([int]$args[2]),([int]$args[3]); $g=[Drawing.Graphics]::FromImage($b); $g.CopyFromScreen([int]$args[0],[int]$args[1],0,0,$b.Size); $b.Save($args[4],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()"
             try:
@@ -143,6 +146,20 @@ def build_candidate(root, exe):
     text=updates.read_text(encoding='utf-8');needle='CURRENT_VERSION = "'+CURRENT_VERSION+'"'
     if text.count(needle)!=1:raise RuntimeError('Cannot create isolated test version')
     updates.write_text(text.replace(needle,'CURRENT_VERSION = "'+test_version+'"'),encoding='utf-8')
+    # Instrument only the unpublished candidate source, not distributed source.
+    # No nonce, token, transcript, or broad environment capture.
+    launcher=source/'windows_launcher.py';text=launcher.read_text(encoding='utf-8')
+    logfile=str(root/'candidate-startup.jsonl')
+    instrumentation="\ndef _ci_diag(event, **details):\n    try:\n        with open("+repr(logfile)+", 'a', encoding='utf-8') as out: out.write(json.dumps({'event':event,'pid':os.getpid(),**details},ensure_ascii=True)+'\\n')\n    except OSError: pass\n\n"
+    text=text.replace('class NativeDownloads(',instrumentation+'class NativeDownloads(',1)
+    text=text.replace('def main():\n',"def main():\n    _ci_diag('main_entered', argc=len(sys.argv), mode=sys.argv[1] if len(sys.argv)>1 else '', executable=sys.executable, localappdata=os.environ.get('LOCALAPPDATA'), pyi_archive=os.environ.get('_PYI_ARCHIVE_FILE'), pyi_level=os.environ.get('_PYI_PARENT_PROCESS_LEVEL'))\n",1)
+    lease_line="    installation_lease=InstallationLease(sys.executable).acquire() if getattr(sys,'frozen',False) else None\n"
+    text=text.replace(lease_line,lease_line+"    _ci_diag('lease_acquired')\n",1)
+    text=text.replace('    downloads._setup_updater(server)\n',"    downloads._setup_updater(server)\n    _ci_diag('backend_window_created')\n",1)
+    text=text.replace('    def acknowledge_update():\n',"    def acknowledge_update():\n        _ci_diag('window_loaded', argc=len(sys.argv), receipt_path=sys.argv[2] if len(sys.argv)>2 else None)\n",1)
+    text=text.replace('            acknowledge_receipt(sys.argv[2],sys.argv[3])',"            try:\n                acknowledged=acknowledge_receipt(sys.argv[2],sys.argv[3])\n                _ci_diag('ack_result',ok=acknowledged)\n            except Exception as exc:\n                _ci_diag('ack_error',kind=type(exc).__name__,message=str(exc))\n                raise",1)
+    text=text.replace("        webview.start(gui='edgechromium', debug=False, private_mode=True)","        _ci_diag('webview_starting')\n        webview.start(gui='edgechromium', debug=False, private_mode=True)",1)
+    compile(text,str(launcher),'exec');launcher.write_text(text,encoding='utf-8')
     from windows_version_resource import write_resource
     resource=root/'candidate-version.txt';write_resource(resource)
     text=resource.read_text(encoding='utf-8').replace(CURRENT_VERSION,test_version).replace(str((*version_tuple(CURRENT_VERSION),0)),str((*parts,0)))
@@ -276,6 +293,16 @@ def main(exe, report_path):
                 report['owned_app_process_diagnostic']=listing.stdout
             except Exception:pass
     finally:
+        if root:
+            log=root/'candidate-startup.jsonl'
+            if log.is_file():
+                report['candidate_startup_events']=[]
+                for line in log.read_text(encoding='utf-8').splitlines()[-40:]:
+                    try:report['candidate_startup_events'].append(json.loads(line))
+                    except ValueError:pass
+            # Only the exact app in this test installation, never unrelated windows.
+            try:report['owned_target_windows']=capture_owned_prompts(root,report_path,None,process_name='DialogueTTS.exe',target_path=root/'installation/DialogueTTS.exe')
+            except Exception as exc:report['target_capture_error']=str(exc)
         if old and old.poll() is None and old_gui_pid:
             close_owned_window(old_gui_pid)
             try:old.wait(timeout=25)

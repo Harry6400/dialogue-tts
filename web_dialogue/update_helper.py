@@ -27,10 +27,18 @@ def acknowledge_receipt(path, nonce):
     Receipt must already exist under a private updater stage. It cannot select
     arbitrary write paths: validate its own nonce, app target and bounded JSON.
     """
-    p=Path(path)
-    base=(Path.home()/'Library/Application Support/DialogueTTS' if sys.platform=='darwin' else Path(os.environ.get('LOCALAPPDATA',str(Path.home()/'AppData/Local')))/'DialogueTTS')/'updates'
-    if not p.is_absolute() or not p.resolve().is_relative_to(base.resolve()) or len(p.relative_to(base).parts)!=2: return False
-    if p.name!='receipt.json' or p.is_symlink() or not p.is_file() or p.stat().st_size>4096: return False
+    from .updater_cli import state_directory
+    raw=Path(path)
+    if not raw.is_absolute() or raw.name!='receipt.json' or raw.is_symlink():return False
+    try:
+        # Both operands must be canonical. On Windows a helper can expand an
+        # 8.3 user/temp path while LOCALAPPDATA still contains its short alias.
+        # macOS /var and /tmp aliases need the same treatment.
+        p=raw.resolve(strict=True)
+        base=(state_directory()/'updates').resolve(strict=True)
+        if not p.is_relative_to(base) or len(p.relative_to(base).parts)!=2:return False
+        if not p.is_file() or p.stat().st_size>4096:return False
+    except (OSError,ValueError,RuntimeError):return False
     try: data=json.loads(p.read_text())
     except (ValueError,OSError):return False
     if data.get('nonce')!=nonce or not isinstance(nonce,str) or len(nonce)!=64: return False

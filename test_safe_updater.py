@@ -197,3 +197,39 @@ class BoundedShellTests(unittest.TestCase):
             with patch('web_dialogue.update_helper.sys.platform','win32'),patch('web_dialogue.update_helper._windows_shell_open',side_effect=lambda *_:release.wait(2)):
                 try:launch_normal(Path(d)/'app.exe',receipt,'n',timeout=.03)
                 finally:release.set();time.sleep(.02)
+
+class CanonicalReceiptTests(unittest.TestCase):
+    @unittest.skipIf(os.name=='nt','Portable alias simulation uses a Unix directory symlink; Windows 8.3 test below')
+    def test_long_receipt_and_short_state_alias_acknowledge(self):
+        import sys
+        from web_dialogue.update_helper import acknowledge_receipt
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);real=root/'long-name';real.mkdir();alias=root/'SHORT~1';alias.symlink_to(real,target_is_directory=True)
+            receipt=real/'updates'/('a'*32)/'receipt.json';receipt.parent.mkdir(parents=True);receipt.write_text(json.dumps({'nonce':'b'*64,'state':'waiting'}))
+            with patch('web_dialogue.updater_cli.state_directory',return_value=alias):
+                self.assertTrue(acknowledge_receipt(receipt.resolve(),'b'*64))
+            self.assertEqual(json.loads(receipt.read_text())['state'],'ready')
+    def test_wrong_nonce_and_outside_root_still_refused(self):
+        from web_dialogue.update_helper import acknowledge_receipt
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);receipt=root/'updates'/('a'*32)/'receipt.json';receipt.parent.mkdir(parents=True);receipt.write_text(json.dumps({'nonce':'b'*64,'state':'waiting'}))
+            with patch('web_dialogue.updater_cli.state_directory',return_value=root):
+                self.assertFalse(acknowledge_receipt(receipt,'c'*64))
+                outside=root/'elsewhere/receipt.json';outside.parent.mkdir();outside.write_text(receipt.read_text())
+                self.assertFalse(acknowledge_receipt(outside,'b'*64))
+            self.assertEqual(json.loads(receipt.read_text())['state'],'waiting')
+    @unittest.skipUnless(os.name=='nt','Real Windows 8.3 alias API test')
+    def test_windows_actual_83_alias_acknowledge(self):
+        import ctypes
+        from web_dialogue.update_helper import acknowledge_receipt
+        with tempfile.TemporaryDirectory(prefix='dialogue receipt alias ') as d:
+            root=Path(d)/'Long State Directory';root.mkdir()
+            buf=ctypes.create_unicode_buffer(32768)
+            api=ctypes.windll.kernel32.GetShortPathNameW;api.argtypes=[ctypes.c_wchar_p,ctypes.c_wchar_p,ctypes.c_uint32];api.restype=ctypes.c_uint32
+            length=api(str(root),buf,len(buf))
+            if not length: self.skipTest('Filesystem does not expose an 8.3 alias')
+            alias=Path(buf.value)
+            if str(alias).casefold()==str(root).casefold():self.skipTest('8.3 names disabled on this filesystem')
+            receipt=root/'updates'/('a'*32)/'receipt.json';receipt.parent.mkdir(parents=True);receipt.write_text(json.dumps({'nonce':'b'*64,'state':'waiting'}))
+            with patch('web_dialogue.updater_cli.state_directory',return_value=alias):self.assertTrue(acknowledge_receipt(receipt.resolve(),'b'*64))
+            self.assertEqual(json.loads(receipt.read_text())['state'],'ready')
