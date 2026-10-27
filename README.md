@@ -10,7 +10,7 @@
 
 下载音频后，点击右上角“退出应用”结束后台并清理临时文件。Mac 原生窗口关闭时也会退出后台。
 
-“检查更新”优先使用 Gitee 国内分发源，网络故障时回退 GitHub。同一更新只接受选定版本、文件名、大小和 SHA-256 一致的附件；摘要、身份和 TLS 校验失败不会靠换源掩盖。下载和校验通过后，经确认正常退出、安装、重启并检查启动回执。系统安全确认仍需正常处理；启动状态未知时保留新旧副本并提示处理。[v0.3.3 已发布](https://github.com/Harry6400/dialogue-tts/releases/tag/v0.3.3)，[国内 Gitee 下载](https://gitee.com/yongchu-64/dialogue-tts/releases/tag/v0.3.3)。Mac v0.3.2 及更早版本需首次手动安装包含更新器修复的新版本，v0.3.3 起可使用修复后的自动更新。当前分支准备 v0.3.4，包含固定数字命名、保存冲突处理及 Mac 退出修复；完整 React 界面改版留给 v0.4.0。验证边界见 docs/PROJECT_STATUS.md。
+“检查更新”优先使用 Gitee 国内分发源，网络故障时回退 GitHub。同一更新只接受选定版本、文件名、大小和 SHA-256 一致的附件；摘要、身份和 TLS 校验失败不会靠换源掩盖。下载和校验通过后，经确认正常退出、安装、重启并检查启动回执。系统安全确认仍需正常处理；启动状态未知时保留新旧副本并提示处理。[v0.3.4 下载](https://github.com/Harry6400/dialogue-tts/releases/tag/v0.3.4)，[国内 Gitee 发行列表](https://gitee.com/yongchu-64/dialogue-tts/releases)。Mac v0.3.2 及更早版本需首次手动安装包含更新器修复的新版本，v0.3.3 起可使用修复后的自动更新。v0.3.4 包含固定数字命名、保存冲突处理及 Mac 退出修复；完整 React 界面改版留给 v0.4.0。验证边界见 docs/PROJECT_STATUS.md。
 
 ## 体积与依赖
 

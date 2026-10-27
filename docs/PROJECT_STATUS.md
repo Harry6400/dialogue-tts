@@ -2,7 +2,18 @@
 
 更新时间：2026-10-28（Asia/Shanghai）。以源码、实际构建和对应验证为准。
 
-## 正式发行 v0.3.3
+## v0.3.4 正式交付状态
+
+- PR #2 已以 merge commit 合并。GitHub、Gitee 的 v0.3.4 标签均固定至 18cf1c16f5aa9ad4b24126cf625dce70ca3c5555，保留阶段提交。当前正式界面仍为原工作台及既有浅色、深色模式。
+- [GitHub v0.3.4](https://github.com/Harry6400/dialogue-tts/releases/tag/v0.3.4) 已发布五附件，并经匿名完整下载校验大小、SHA-256 全部一致。Gitee 官方发行表单已暂存 Mac 包与摘要；其余三附件和正式提交待本机解锁后完成，尚不能宣称双站交付。
+- Mac：0.3.4 / 构建号 8；12,668,273 字节；SHA-256 2297ed0251139ee41ef1dc3e6532d7269067fea42efa1e032bce7b3d9b4ddb7a。
+- Windows：标签 CI 40541250675 第 2 次运行；15,355,284 字节；SHA-256 e3a7c4ae6fda7a940667fe5bf8afe354c6986444e6f63c6b7564d4342ce1ad4e。首次运行的墙钟计时断言失败保留；原断言未调整，重跑通过。
+- 两平台各 132 个导出源码文件与标签逐一一致（Windows CRLF 规范化比较）；Mac 包身份、架构和签名、Windows PE 版本、许可均已核对。五附件已归档，v0.3.3 既有五附件摘要保持原样。
+- 真实 v0.3.3 发行 ZIP → v0.3.4 真实 ZIP 的隔离 Mac 更新通过：旧进程正常退出、替换 complete、原生 ready、设置和旧备份保留、隔离标记保留。首次旧包冷启动超过验收脚本 45 秒；按生产原有 90 秒期限重跑通过，首次失败记录保留。
+- Windows 标签构建的真实合成、原生保存／目录导出、窗口及主题恢复通过；完整更新仍为 requires_system_confirmation、end_to_end_passed=false，仅 ci_gate_passed=true。国内 Windows、旧系统真机验证仍缺失。
+- 下一步仅补齐 Gitee 发行和匿名下载、更新源发现核验，再开始 v0.4.0 布局设计；本轮未做界面改版，未替换用户安装。
+
+## 历史发行 v0.3.3
 
 - PR #1 已用 merge commit 合并；标签 v0.3.3 固定在 b5956adbb857876ff2fac5fea73bb24dc76097b5，保留阶段提交。
 - [GitHub](https://github.com/Harry6400/dialogue-tts/releases/tag/v0.3.3) 与 [Gitee](https://gitee.com/yongchu-64/dialogue-tts/releases/tag/v0.3.3) 均已正式发布相同五附件：双平台 ZIP、各自 .sha256、SHA256SUMS。
@@ -15,9 +26,9 @@
 - Windows 冻结构建、真实微软合成和原生窗口 CI 通过。完整更新停在系统安全确认，结果 requires_system_confirmation，不能标为端到端通过。
 - **Mac 已安装 v0.3.x 首次需手动安装 v0.3.3，之后再使用修复后的自动更新。** 旧更新器运行时代码无法靠新 ZIP 回补。本次没有替换用户安装或改写旧版发行附件。
 
-## 当前收尾 v0.3.4（待发布）
+## v0.3.4 实现范围与历史候选
 
-从 v0.3.3 建立 feat/v0.4-output-names，保留原分支及阶段提交；本轮改为独立发布 v0.3.4 / Mac 构建号 8。历史 0.4.0 / Mac 7 仅为未发布候选，不复用其包作为正式发行。
+从 v0.3.3 建立 feat/v0.4-output-names，已通过 PR #2 合并；本轮独立发布 v0.3.4 / Mac 构建号 8。历史 0.4.0 / Mac 7 仅为未发布候选，没有作为正式发行复用。
 
 - 先按 XML 标识与角色配对，再要求同一非空 ASCII 数字前缀、末位分别 0/1、大小写均可的 .xml。全程字符串处理，输出数字前缀加 .mp3。
 - 预览、任务、批次、下载响应、ZIP 成员统一使用服务端 filename；文件名加入请求幂等绑定，不改变音频指纹。
