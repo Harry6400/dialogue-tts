@@ -69,9 +69,11 @@ def main(exe, report_path):
     from web_dialogue.safe_updater import sha256, validate_payload
     from web_dialogue.updates import CURRENT_VERSION
     report={'passed':False,'platform':sys.platform,'network_metadata':'not exercised; local candidate staged by test harness','folder_dialog_and_reveal':'mocked in separate folder smoke','cases':{}}
-    child=None;old=None;old_gui_pid=None;app_pid=None
+    child=None;old=None;old_gui_pid=None;app_pid=None;root=None;stage=None
     try:
-        with tempfile.TemporaryDirectory(prefix='dialogue-upgrade-ci-') as name:
+        # Keep failed CI sandboxes until runner teardown so evidence is not masked by EXE locks.
+        from contextlib import nullcontext
+        with nullcontext(tempfile.mkdtemp(prefix='dialogue-upgrade-ci-')) as name:
             root=Path(name);local=root/'localappdata';state=local/'DialogueTTS';state.mkdir(parents=True)
             env={**os.environ,'LOCALAPPDATA':str(local)}
             # Independent sentinel bytes represent persisted settings, receipts and cache.
@@ -143,12 +145,34 @@ def main(exe, report_path):
             report['passed']=True
     except Exception as exc:
         report['error']=str(exc)
+        report['helper_returncode']=child.poll() if child else None
+        if stage:
+            report['transaction_evidence']={}
+            for name in ('plan.json','helper-ready.json','receipt.json','status.json'):
+                file=stage/name
+                if file.is_file():
+                    try:
+                        evidence=json.loads(file.read_text())
+                        report['transaction_evidence'][name]={k:v for k,v in evidence.items() if k not in {'nonce','helper_nonce'}}
+                    except (OSError,ValueError):report['transaction_evidence'][name]='unreadable'
+            if (stage/'plan.json').is_file():
+                from web_dialogue.update_helper import alive
+                plan=json.loads((stage/'plan.json').read_text())
+                report['old_pid_alive']={str(pid):alive(pid) for pid in plan['old_pids']}
+                report['replacement_started']=(stage/'replacing').exists()
+            try:
+                listing=subprocess.run(['tasklist','/FI','IMAGENAME eq DialogueTTS.exe','/FO','CSV'],capture_output=True,text=True,timeout=10)
+                report['owned_app_process_diagnostic']=listing.stdout
+            except Exception:pass
     finally:
         if old and old.poll() is None and old_gui_pid:
             close_owned_window(old_gui_pid)
             try:old.wait(timeout=25)
             except subprocess.TimeoutExpired:pass
         if app_pid:close_owned_window(app_pid)
+        if report['passed'] and root:
+            try:shutil.rmtree(root)
+            except OSError:pass
         Path(report_path).write_text(json.dumps(report,indent=2,ensure_ascii=False),encoding='utf-8')
     if not report['passed']:raise RuntimeError('Windows isolated upgrade smoke failed; see report')
 
