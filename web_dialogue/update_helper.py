@@ -77,7 +77,12 @@ def _receipt_ready(receipt,nonce):
 def launch_normal(target, receipt, nonce, *, timeout=90):
     args=['--update-receipt',str(receipt),nonce]
     if sys.platform=='darwin':
-        try: subprocess.run(['/usr/bin/open','-n',str(target),'--args',*args],check=True,timeout=30)
+        from .verification_profile import ENV, verification_root
+        profile = verification_root()
+        # Only explicit verification launches carry a private state root through LaunchServices.
+        command = ['/usr/bin/open', '-n', str(target)]
+        if profile is not None: command += ['--env', ENV + '=' + str(profile)]
+        try: subprocess.run([*command, '--args', *args],check=True,timeout=30)
         except subprocess.TimeoutExpired as exc: raise RecoveryRequired('System open is still pending; both versions retained') from exc
         deadline=time.monotonic()+timeout
         while time.monotonic()<deadline:

@@ -61,6 +61,21 @@ class FoundationTests(unittest.TestCase):
             self.assertIn(name, files)
         self.assertFalse(any('node_modules' in p or '/dist/' in p for p in files))
 
+    def test_verification_profile_is_explicit_and_private(self):
+        from web_dialogue.verification_profile import ENV, verification_root
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(verification_root())
+            with tempfile.TemporaryDirectory() as raw:
+                root = Path(raw); root.chmod(0o700)
+                with patch.dict(os.environ, {ENV: str(root)}):
+                    self.assertEqual(verification_root(), root.resolve())
+                    if os.name != 'nt':
+                        root.chmod(0o755)
+                        with self.assertRaises(ValueError): verification_root()
+                        root.chmod(0o700)
+                with patch.dict(os.environ, {ENV: '.'}):
+                    with self.assertRaises(ValueError): verification_root()
+
     def test_tag_lookup_rejects_untrusted_paths_without_network(self):
         with patch('urllib.request.build_opener') as op:
             for tag in ('v1.2.3/../../latest', 'https://evil', '1.2.3', ''):

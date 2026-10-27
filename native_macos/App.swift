@@ -307,6 +307,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var offeredUpdateIdentity: String?
     private let savedDownloads = SavedDownloadRegistry()
     private let folderState: FolderState = {
+        if let root = ProcessInfo.processInfo.environment["DIALOGUE_VERIFICATION_STATE_ROOT"], root.hasPrefix("/") {
+            var info = stat()
+            precondition(lstat(root, &info) == 0 && (info.st_mode & S_IFMT) == S_IFDIR && info.st_uid == getuid() && (info.st_mode & 0o077) == 0, "Verification profile must be private and user-owned")
+            return FolderState(storeOverride: URL(fileURLWithPath: root).appendingPathComponent("preferences.json"))
+        }
         let args = CommandLine.arguments
         if args.count == 3, args[1] == "--verification-state", args[2].hasPrefix("/") {
             return FolderState(storeOverride: URL(fileURLWithPath: args[2]).appendingPathComponent("preferences.json"))

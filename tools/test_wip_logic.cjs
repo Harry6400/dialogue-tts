@@ -1,5 +1,5 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
-const html=fs.readFileSync(require('path').join(__dirname,'../web_dialogue/index.html'),'utf8');
+const html=fs.readFileSync(require('path').join(__dirname,'../web_dialogue/index.html'),'utf8').replace(/\r\n/g,'\n');
 const summary=html.match(/function summarizeBatch\([\s\S]*?\n}\n(?=function renderBatchStatus)/)[0];
 const context={Set};vm.createContext(context);vm.runInContext(summary,context);
 const groups=[{id:'a',status:'ready'},{id:'b',status:'ready'},{id:'c',status:'error',error_code:'missing_track'},{id:'d',status:'error'}];
