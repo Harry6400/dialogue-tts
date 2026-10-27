@@ -45,8 +45,8 @@ def interval(start, end, unit):
 def parse_xml_pair(payload):
     files = payload.get('xml_files')
     unit = payload.get('xml_time_unit', 'ms')
-    if unit not in {'ms', 's'}:
-        raise XMLImportError('XML时间单位只支持毫秒或秒。')
+    if unit != 'ms':
+        raise XMLImportError('当前固定按毫秒解析 XML，不支持秒单位。')
     if not isinstance(files, list) or len(files) != 2:
         raise XMLImportError('请同时选择同一通对话的两份XML。')
     combined, sources, refs, starts, roles, durations = [], [], [], [], [], []
@@ -106,13 +106,13 @@ def parse_xml_pair(payload):
         raise XMLImportError('两份XML的对话标识不一致，请选择同一通对话的两个声道。')
     if len(combined) > 100:
         raise XMLImportError('两份文件合计最多100段，请拆分后处理。')
-    combined.sort(key=lambda row: (row['start_ms'], row['_file_index'], row['_segment_index']))
+    combined.sort(key=lambda row: (row['start_ms'], 0 if row['speaker'] == 'AGENT' else 1, row['_segment_index']))
     for index, row in enumerate(combined):
         row['id'] = index + 1
         row['overlap'] = any(row['speaker'] != other['speaker'] and row['start_ms'] < other['end_ms'] and row['end_ms'] > other['start_ms'] for other in combined)
         del row['_file_index']; del row['_segment_index']
     muted_count = sum(row['muted'] for row in combined)
-    warnings = [f'XML未声明时间单位，当前按{"毫秒" if unit == "ms" else "秒"}解析；请核对预览。', '按起点排序串行配音，不还原原始时长或重叠说话。']
+    warnings = ['按毫秒起点排序串行配音，不还原原始时长或重叠说话。']
     for label, values in (('开始时间', starts), ('时长', durations)):
         if all(values) and values[0] != values[1]:
             warnings.append('相同 callReference 的' + label + '不一致；仍按段内时间排序，请核对质量。')

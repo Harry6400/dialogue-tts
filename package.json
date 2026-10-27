@@ -1,0 +1,13 @@
+{
+  "name": "dialogue-development",
+  "private": true,
+  "workspaces": ["frontend"],
+  "engines": {"node": ">=22.12 <23", "npm": ">=10"},
+  "scripts": {
+    "dev:frontend": "npm run dev --workspace frontend",
+    "check:frontend": "npm run check --workspace frontend",
+    "test:legacy-ui": "node tools/check_legacy_ui.cjs",
+    "check": "npm run test:legacy-ui && npm run check:frontend"
+  },
+  "devDependencies": {"jsdom": "26.1.0"}
+}

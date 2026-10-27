@@ -15,3 +15,8 @@ verification/
 private/
 .DS_Store
 evidence/
+node_modules/
+frontend/dist/
+.cache/
+.coverage
+coverage/

@@ -24,8 +24,8 @@ class Integration(unittest.TestCase):
    self.assertEqual(s.discover('0.3.2','darwin')['state'],'latest');gh.assert_not_called()
  def test_exact_version_and_hash_binding(self):
   choice,_,_=sample(); alternate={**choice,'source':'github','archive':dict(choice['archive']),'checksum':dict(choice['checksum'])}
-  with patch.object(s,'fetch_release',return_value={}),patch.object(s,'release_offer',return_value=alternate):
-   self.assertEqual(s.matching_github(choice)['version'],'0.4.0')
+  with patch.object(s,'fetch_release',return_value={}) as fetch,patch.object(s,'release_offer',return_value=alternate):
+   self.assertEqual(s.matching_github(choice)['version'],'0.4.0');fetch.assert_called_once_with('v0.4.0')
    alternate['version']='0.5.0'
    with self.assertRaises(s.UpdateError):s.matching_github(choice)
    alternate['version']='0.4.0';alternate['archive']['sha256']='f'*64
@@ -37,13 +37,13 @@ class Integration(unittest.TestCase):
   with TemporaryDirectory() as d:
    stage=Path(d)/'stage'; payload=stage/'payload'
    def write(op,offer,path,progress):Path(path).write_bytes(data)
-   with patch.object(g,'make_opener',return_value=object()),patch.object(g,'download_verified',side_effect=write),patch.object(safe,'extract_safe',return_value=payload) as extract,patch.object(safe,'validate_payload') as validate,patch.object(safe.os,'setxattr',create=True):
+   with patch.object(g,'make_opener',return_value=object()),patch.object(g,'download_verified',side_effect=write),patch.object(safe,'extract_safe',return_value=payload) as extract,patch.object(safe,'validate_payload') as validate,patch.object(safe,'mark_macos_quarantine'):
     self.assertEqual(safe.prepare(found,stage),payload);extract.assert_called_once();validate.assert_called_once_with(payload,'0.4.0','darwin')
  def test_download_fallback_only_network(self):
   choice,data,raw=sample()
   with TemporaryDirectory() as d:
    def write(asset,path,progress=None):Path(path).write_bytes(raw if asset['name'].endswith('.sha256') else data)
-   with patch.object(g,'make_opener',return_value=object()),patch.object(g,'download_verified',side_effect=g.NetworkError()),patch.object(s,'matching_github',return_value=choice),patch.object(safe,'download',side_effect=write),patch.object(safe,'extract_safe',return_value=Path(d)/'payload'),patch.object(safe,'validate_payload'),patch.object(safe.os,'setxattr',create=True):
+   with patch.object(g,'make_opener',return_value=object()),patch.object(g,'download_verified',side_effect=g.NetworkError()),patch.object(s,'matching_github',return_value=choice),patch.object(safe,'download',side_effect=write),patch.object(safe,'extract_safe',return_value=Path(d)/'payload'),patch.object(safe,'validate_payload'),patch.object(safe,'mark_macos_quarantine'):
     safe.prepare(choice,Path(d)/'stage')
   with TemporaryDirectory() as d,patch.object(g,'make_opener',return_value=object()),patch.object(g,'download_verified',side_effect=g.ValidationError()),patch.object(s,'matching_github') as fallback:
    with self.assertRaises(g.ValidationError):safe.prepare(choice,Path(d)/'stage')

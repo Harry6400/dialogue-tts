@@ -1,0 +1,2 @@
+# Offline unit and HTTP tests use the runtime dependencies; unittest is built in.
+-r web_dialogue/requirements.txt

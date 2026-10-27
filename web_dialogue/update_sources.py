@@ -21,7 +21,7 @@ def discover(current, platform):
 
 def matching_github(selected):
  """Fallback may use only precisely the selected version and identical bytes."""
- candidate=release_offer(fetch_release(),'0.0.0',selected['platform'])
+ candidate=release_offer(fetch_release('v'+selected['version']),'0.0.0',selected['platform'])
  if candidate.get('state')!='available' or candidate.get('version')!=selected['version']:
   raise UpdateError('备用源版本不一致，请重新检查更新')
  for key in ('archive','checksum'):

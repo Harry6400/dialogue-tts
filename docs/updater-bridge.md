@@ -1,6 +1,6 @@
 # v0.3 native updater integration
 
-Fixed repository Harry6400/dialogue-tts. No JS URL/path/command parameters.
+Fixed GitHub repository Harry6400/dialogue-tts; Gitee distribution repository yongchu-64/dialogue-tts. No JS URL/path/command parameters.
 
 ## UI contract (implemented in index.html)
 - Windows `window.pywebview.api.check_for_update()` / `install_update()`.
@@ -48,3 +48,19 @@ Helper must publish nonce-matching ready before native host exits. Failed startu
 If old service fails to exit normally, do NOT force terminate it and do NOT simply unlock UI. Invoke `DialogueTTSService --cancel-update TRANSACTION_ID CANCEL_TOKEN` using the same original trusted executable and retained native values. It reads only `AppSupport/DialogueTTS/updates/<ID>/plan.json`; a matching nonce is required. Result `{state:"cancelled",cancelled:true}` confirms a durable cancellation while still pre-replacement. Then native may undo its update lock and leave old app running; future ordinary exit cannot install that cancelled transaction. Result `too_late,cancelled:false` means replacement boundary already committed: do not claim cancellation or launch competing actions; keep/report pending status. CLI error/timeout means cancellation NOT confirmed; preserve old process and retry/report blocker, never kill it. Bound native CLI wait (e.g.15s) but do not treat elapsed time as successful cancellation.
 Helper's final replacement boundary and cancellation share an exclusive transaction lock. Helper checks cancellation before ready, while awaiting old PIDs, and atomically before marking replacement started. No caller may unlink cancellation markers. A replacement-started transaction cannot be rearmed or cancelled.
 `extract_safe` canonicalizes the newly created root with resolve before all symlink containment comparisons, allowing legitimate macOS `/var`→`/private/var` and `/tmp` aliases without weakening escape rejection.
+
+## Source and packaging contract
+
+Gitee is first. Only transport/service availability failures permit GitHub fallback; unsafe redirect, TLS, malformed metadata, size or digest failure remains an error. Fallback fetches the **selected version tag**, not GitHub latest, and compares archive/checksum names, lengths and hashes. The Gitee catalogue source is independent of the builtin voice catalogue and cannot establish voice/network availability.
+
+`tools/package_macos.py` uses UTF-8 ZIP names and POSIX symlink entries without dereferencing them. The published v0.3.2 archive used a legacy filename encoding that causes existing extractors to reject symlinks. Fixes are in candidate packaging; published assets are untouched. Actual rebuilt archives must pass old v0.3.x extractors as well as current identity/signature checks. Do not relax archive containment checks.
+
+Source exports share `tools/package_sources.py`: root tests and Python modules, workflow, layered rules, frontend sources/configuration and both ecosystems' locks are included. Dependency trees, generated builds, evidence and private inputs are excluded.
+
+## macOS runtime and first-install compatibility
+
+CPython on macOS does not provide the Linux `os.setxattr` API used by the old v0.3.x updater. The candidate uses `/usr/bin/xattr -w`, then reads the marker back. The actual same-filesystem incoming bundle is marked again before replacement because Python copying may drop the attribute. Failures leave the installed application in place; this never clears quarantine or changes Gatekeeper policy.
+
+Old v0.3.0/0.3.1/0.3.2 extractors accept the new ZIP format. This does not establish full backward automatic-update compatibility with old runtime code. The owner has accepted a one-time manual installation of a future fixed release, followed by automatic updates from that fixed updater. Existing release assets are untouched. This branch is not a published fix.
+
+`tools/macos_upgrade_smoke.py` is opt-in: it creates a private installation/profile under verification, uses the real built ZIP and frozen helper, waits for both dedicated old native processes to exit normally, retains backups and checks the native nonce receipt. It uses normal LaunchServices policy and does not clear internet-origin marking. The old native candidate has test-only version metadata; it is not the untouched older release binary. It does not test remote release discovery; normal current-candidate close/save is tested separately. Its evidence is private and excluded from source exports.

@@ -35,8 +35,11 @@ def sha256(path):
         for block in iter(lambda:f.read(1024*1024), b''): h.update(block)
     return h.hexdigest()
 
-def fetch_release():
-    req = urllib.request.Request(LATEST_API_URL, headers={'User-Agent':'DialogueTTS-Updater','Accept':'application/vnd.github+json'})
+def fetch_release(tag=None):
+    if tag is not None and (not isinstance(tag, str) or not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag)):
+        raise UpdateError('Invalid release tag')
+    url = LATEST_API_URL if tag is None else f'https://api.github.com/repos/{REPO}/releases/tags/{tag}'
+    req = urllib.request.Request(url, headers={'User-Agent':'DialogueTTS-Updater','Accept':'application/vnd.github+json'})
     # API must not redirect to arbitrary endpoints.
     from .updates import NoRedirect
     import certifi
@@ -176,6 +179,19 @@ def validate_windows_version(path, version):
         return ctypes.wstring_at(ptr.value,length.value).rstrip('\0')
     if query('ProductName')!='DialogueTTS' or query('InternalName')!='DialogueTTS' or query('FileVersion')!=version: raise UpdateError('Wrong Windows product/version')
 
+def mark_macos_quarantine(payload):
+    # CPython's os.setxattr is a Linux API and is absent on macOS.
+    # Use the system tool to ADD the origin marker and verify it was persisted.
+    value = f'0083;{int(time.time()):x};DialogueTTS;'
+    try:
+        subprocess.run(['/usr/bin/xattr', '-w', 'com.apple.quarantine', value, str(payload)],
+                       check=True, capture_output=True, timeout=10)
+        actual = subprocess.check_output(['/usr/bin/xattr', '-p', 'com.apple.quarantine', str(payload)],
+                                         timeout=10, text=True).strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise UpdateError('无法写入下载来源标记，更新已停止') from exc
+    if actual != value: raise UpdateError('下载来源标记核验失败')
+
 def prepare(offer, stage, progress=None):
     stage=Path(stage);stage.mkdir(mode=0o700,parents=True,exist_ok=False)
     archive=stage/offer['archive']['name']; checksum=stage/offer['checksum']['name']
@@ -196,7 +212,7 @@ def prepare(offer, stage, progress=None):
     validate_payload(payload,offer['version'],offer['platform'])
     if offer['platform']=='darwin':
         # Mark internet-origin code; never remove quarantine or bypass Gatekeeper.
-        os.setxattr(payload,'com.apple.quarantine',f'0083;{int(time.time()):x};DialogueTTS;'.encode())
+        mark_macos_quarantine(payload)
     return payload
 
 def replace_transaction(target, staged, launch_and_verify):
@@ -209,7 +225,11 @@ def replace_transaction(target, staged, launch_and_verify):
     incoming=work/target.name
     moved_old=False
     try:
-        if staged.is_dir(): shutil.copytree(staged,incoming,symlinks=True)
+        if staged.is_dir():
+            shutil.copytree(staged,incoming,symlinks=True)
+            # copytree/copy2 do not reliably preserve macOS quarantine. Mark
+            # and read back the actual incoming bundle before moving the old one.
+            if sys.platform == 'darwin': mark_macos_quarantine(incoming)
         else:
             with open(staged,'rb') as src,open(incoming,'xb') as dst:
                 shutil.copyfileobj(src,dst,1024*1024);dst.flush();os.fsync(dst.fileno())

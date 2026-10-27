@@ -7,11 +7,16 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 from collect_licenses import collect
+from package_sources import export_sources
+from package_macos import package_macos
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from web_dialogue.updates import CURRENT_VERSION, MAC_BUILD_NUMBER
 
 
 def main():
@@ -40,7 +45,7 @@ exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='DialogueTTSService', 
     disable_windowed_traceback=False, argv_emulation=False, target_arch='arm64', codesign_identity=None, entitlements_file=None)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='DialogueTTSService')
 app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.github.Harry6400.dialoguetts',
-    info_plist={{'CFBundleDisplayName':'对白', 'CFBundleShortVersionString':'0.3.2', 'CFBundleVersion':'5',
+    info_plist={{'CFBundleDisplayName':'对白', 'CFBundleShortVersionString':{CURRENT_VERSION!r}, 'CFBundleVersion':{MAC_BUILD_NUMBER!r},
     'LSMinimumSystemVersion':'12.0', 'NSHighResolutionCapable':True, 'LSApplicationCategoryType':'public.app-category.utilities'}})
 ''', encoding='utf-8')
     env = dict(os.environ, PYINSTALLER_CONFIG_DIR=str(work / 'cache'))
@@ -56,6 +61,7 @@ app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.
         info = plistlib.load(stream)
     info['CFBundleExecutable'] = 'DialogueTTS'
     info['CFBundleName'] = '对白'
+    info.pop('LSBackgroundOnly', None)
     info['NSAppTransportSecurity'] = {'NSAllowsLocalNetworking': True}
     with plist_path.open('wb') as stream:
         plistlib.dump(info, stream)
@@ -86,17 +92,13 @@ app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.
         '界面使用系统 WKWebView，服务仅在本机临时端口运行，不是外部后端。\n'
         '本包为本机构建，包含临时签名，未经过 Apple 开发者公证。\n'
         '源码与重建说明见同目录 DialogueTTS-Source.zip。\n', encoding='utf-8')
-    roots = ['LICENSE', 'NOTICE', 'README.md', 'README_构建与许可.md', 'WINDOWS_开始使用.txt',
-             'mac_launcher.py', 'windows_launcher.py', 'native_windows_folders.py', 'native_windows_updater.py', 'requirements-windows-build.txt', 'test_safe_updater.py', 'test_gitee_provider.py', 'test_update_sources.py', 'docs',
-             'web_dialogue', 'native_macos', 'examples', 'assets', 'third_party', 'tools', '.github/workflows']
-    with zipfile.ZipFile(stage / 'DialogueTTS-Source.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for name in roots:
-            item = ROOT / name
-            for file in ([item] if item.is_file() else sorted(item.rglob('*'))):
-                if file.is_file() and '__pycache__' not in file.parts and file.suffix != '.pyc':
-                    archive.write(file, 'DialogueTTS-Source/' + file.relative_to(ROOT).as_posix())
+    export_sources(ROOT, stage / 'DialogueTTS-Source.zip')
     archive = out / 'DialogueTTS-macOS-arm64.zip'
-    subprocess.run(['/usr/bin/ditto', '-c', '-k', '--keepParent', str(stage), str(archive)], check=True)
+    package_macos(stage, archive)
+    from web_dialogue.safe_updater import extract_safe, validate_payload
+    with tempfile.TemporaryDirectory(prefix='dialogue-built-archive-') as check:
+        extracted = extract_safe(archive, Path(check) / 'payload', 'darwin')
+        validate_payload(extracted, info['CFBundleShortVersionString'], 'darwin')
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (out / (archive.name + '.sha256')).write_text(digest + '  ' + archive.name + '\n', encoding='utf-8')
     app_bytes = sum(file.stat().st_size for file in app.rglob('*') if file.is_file() and not file.is_symlink())

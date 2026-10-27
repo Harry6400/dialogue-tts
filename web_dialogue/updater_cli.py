@@ -6,6 +6,9 @@ from .update_sources import discover, offer_identity
 from .updater_bridge import Updater
 
 def state_directory():
+    from .verification_profile import verification_root
+    verification = verification_root()
+    if verification is not None: return verification
     import os
     return (Path.home()/'Library/Application Support/DialogueTTS' if sys.platform=='darwin' else Path(os.environ.get('LOCALAPPDATA',str(Path.home()/'AppData/Local')))/'DialogueTTS')
 

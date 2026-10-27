@@ -1,4 +1,4 @@
-"""Isolated Gitee provider candidate; not connected to the production updater.
+"""Bounded anonymous Gitee provider used by the production source selector.
 
 The caller must pass the resulting archive through safe_updater's existing
 extract_safe/validate_payload path. A checksum served by the same provider is

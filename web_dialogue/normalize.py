@@ -2,12 +2,12 @@
 import math
 
 VOICES = [
-    {"id": "zh-CN-XiaoxiaoNeural", "label": "晓晓 · 普通话女声 · 温和"},
-    {"id": "zh-CN-XiaoyiNeural", "label": "晓伊 · 普通话女声 · 明快"},
-    {"id": "zh-CN-YunxiNeural", "label": "云希 · 普通话男声"},
-    {"id": "zh-CN-YunjianNeural", "label": "云健 · 普通话男声"},
-    {"id": "zh-CN-YunxiaNeural", "label": "云夏 · 普通话男声"},
-    {"id": "zh-CN-YunyangNeural", "label": "云扬 · 普通话男声"},
+    {"id": "zh-CN-XiaoxiaoNeural", "label": "晓晓 · 普通话女声 · 温和", "locale": "zh-CN", "gender": "Female"},
+    {"id": "zh-CN-XiaoyiNeural", "label": "晓伊 · 普通话女声 · 明快", "locale": "zh-CN", "gender": "Female"},
+    {"id": "zh-CN-YunxiNeural", "label": "云希 · 普通话男声", "locale": "zh-CN", "gender": "Male"},
+    {"id": "zh-CN-YunjianNeural", "label": "云健 · 普通话男声", "locale": "zh-CN", "gender": "Male"},
+    {"id": "zh-CN-YunxiaNeural", "label": "云夏 · 普通话男声", "locale": "zh-CN", "gender": "Male"},
+    {"id": "zh-CN-YunyangNeural", "label": "云扬 · 普通话男声", "locale": "zh-CN", "gender": "Male"},
 ]
 
 class InputError(ValueError):
@@ -43,7 +43,7 @@ def normalize(payload, catalog=None):
             raise InputError("角色音色映射必须是对象。")
         mapping = {"AGENT": VOICES[0]["id"], "USER": VOICES[1]["id"], **configured}
         from .honorific import direct_address
-        auto = payload.get('auto_voice', False)
+        auto = payload.get('auto_voice', True)
         manual = payload.get('manual_user_voice', False)
         if not isinstance(auto, bool) or not isinstance(manual, bool):
             raise InputError('音色匹配设置无效。')
@@ -76,6 +76,7 @@ def normalize(payload, catalog=None):
         result["fingerprint"] = dialogue_fingerprint(imported["_call_reference"], result["script"])
         result["voice_choice"] = {"user": mapping["USER"], "reason": reason, "address": address}
         result["format"] = "xml_pair"
+        result["speakers"] = ["AGENT", "USER"]
         return result
     if not isinstance(payload, dict) or "data" not in payload:
         raise InputError("请提供 JSON 内容。")
@@ -97,7 +98,7 @@ def normalize(payload, catalog=None):
     mapping = payload.get("voices", {})
     if not isinstance(mapping, dict):
         raise InputError("角色音色映射必须是对象。")
-    allowed = {v["id"] for v in (catalog if catalog is not None else VOICES)}
+    allowed = {v["id"] for v in VOICES} & {v["id"] for v in (catalog if catalog is not None else VOICES)}
     speakers, clean, total = [], [], 0
     for i, row in enumerate(rows, 1):
         if not isinstance(row, dict):

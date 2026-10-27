@@ -8,6 +8,7 @@ import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 def pyinstaller_command(source, out, work, version_resource):
     return [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
@@ -51,6 +52,8 @@ def main():
     if (ROOT / 'third_party').is_dir():shutil.copytree(ROOT / 'third_party', stage / 'third_party', dirs_exist_ok=True)
     from collect_licenses import collect
     collect(stage / 'third_party' / 'bundled-runtime')
+    from package_sources import export_sources
+    export_sources(ROOT, stage / 'DialogueTTS-Source.zip')
     archive = out / 'DialogueTTS-Windows-x64.zip'
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for file in sorted(stage.rglob('*')):

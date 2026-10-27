@@ -21,11 +21,18 @@ class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
     def __init__(self, base, storage=None):
         self._base = base
         self._window = None
+        self._closing = False
         self._saved = {}
         self._lock = threading.Lock()
         self._setup_folders(storage)
 
+    def request_close(self):
+        if self._window is None: return {'ok': False}
+        threading.Timer(.05, self._window.destroy).start()
+        return {'ok': True}
+
     def save_download(self, route):
+        if self._closing: return {'ok': False, 'error': '正在退出'}
         if getattr(getattr(self,"_update_server",None),"update_in_progress",False): return {"ok":False,"error":"正在准备更新"}
         import re
         import tempfile
@@ -81,6 +88,7 @@ class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
             self._lock.release()
 
     def save_to_output(self, resource_path, folder_id):
+        if self._closing: return {"ok":False,"error":"正在退出"}
         if getattr(getattr(self,"_update_server",None),"update_in_progress",False): return {"ok":False,"error":"正在准备更新"}
         return super().save_to_output(resource_path, folder_id)
 
@@ -238,15 +246,39 @@ def run_window(gui_report=None):
             acknowledge_receipt(sys.argv[2],sys.argv[3])
     window.events.loaded += acknowledge_update
     report = {'frozen':bool(getattr(sys,'frozen',False)), 'platform':sys.platform, 'passed':False}
+    checking_close = threading.Event()
+    def review_close():
+        try:
+            with server.jobs.lock:
+                running = any(item['process'].poll() is None for item in server.jobs.items.values())
+            import ctypes
+            from native_close import close_decision
+            try: state = window.evaluate_js("window.dialogueCloseSafety && window.dialogueCloseSafety()")
+            except Exception: state = None
+            def prompt(kind):
+                if kind == 'unsaved':
+                    answer = ctypes.windll.user32.MessageBoxW(None, '还有未保存的音频。退出会清理临时结果，并停止正在运行的任务。\n是：返回保存；否：放弃并退出；取消：取消退出。', '对白', 0x23)
+                    return {6:'save',7:'discard'}.get(answer,'cancel')
+                if kind == 'running':
+                    return 'discard' if ctypes.windll.user32.MessageBoxW(None, '正在合成，确定停止并退出？', '对白', 0x24) == 6 else 'cancel'
+                ctypes.windll.user32.MessageBoxW(None, '正在保存或暂时无法确认页面状态，请完成操作后再退出。', '对白', 0x40)
+                return 'cancel'
+            decision = close_decision(state, running=running, saving=downloads._lock.locked(), prompt=prompt)
+            if decision == 'save':
+                window.evaluate_js("window.dialogueShowUnsaved && window.dialogueShowUnsaved()")
+            if decision != 'exit': return
+            downloads._closing = True
+            window.destroy()
+        finally:
+            checking_close.clear()
+
     def closing():
         if getattr(server,"update_in_progress",False) and downloads._updater.state.get("state") != "waiting_for_exit": return False
-        if gui_report: return True
-        with server.jobs.lock:
-            running = any(item['process'].poll() is None for item in server.jobs.items.values())
-        if running:
-            import ctypes
-            return ctypes.windll.user32.MessageBoxW(None, '正在合成，退出会停止本次任务。确定退出？', '对白', 0x24) == 6
-        return True
+        if gui_report or downloads._closing: return True
+        if not checking_close.is_set():
+            checking_close.set()
+            threading.Thread(target=review_close, daemon=True).start()
+        return False
     window.events.closing += closing
     if gui_report:
         def capture_window(name):

@@ -64,10 +64,11 @@ class FolderTests(unittest.TestCase):
         restored=Host(self.root).get_preferences()
         self.assertEqual(restored['voices']['USER'],'zh-CN-YunxiNeural')
         self.assertTrue(restored['manual_user_voice']);self.assertFalse(restored['auto_voice'])
-    def test_foreign_voice_id_storage_is_structural_not_membership(self):
+    def test_legacy_foreign_preferences_survive_read_but_new_foreign_writes_fail(self):
         voices={'AGENT':'en-US-JennyNeural','USER':'zh-CN-XiaoyiNeural'}
-        self.assertTrue(self.host.set_preferences({'voices':voices})['ok'])
+        (self.root/'prefs.json').write_text(json.dumps({'version':1,'voices':voices,'paths':{},'receipts':{},'exports':{}}))
         self.assertEqual(Host(self.root).get_preferences()['voices'],voices)
+        self.assertFalse(self.host.set_preferences({'voices':voices})['ok'])
         self.assertFalse(self.host.set_preferences({'voices':{'USER':'https://evil/voice'}})['ok'])
         self.assertEqual(Host(self.root).get_preferences()['voices'],voices)
     def test_new_and_legacy_voices_persist(self):
