@@ -407,14 +407,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             DispatchQueue.main.async {
                 guard let self = self, !self.closing else { return }
                 if self.baseURL == nil { self.showStartupError() }
-                NSApp.terminate(nil)
+                scheduleNativeTermination { NSApp.terminate(nil) }
             }
         }
-        do { try process.run() } catch { showStartupError(); NSApp.terminate(nil); return }
+        do { try process.run() } catch { showStartupError(); scheduleNativeTermination { NSApp.terminate(nil) }; return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
             guard let self = self, self.baseURL == nil, !self.closing else { return }
             self.showStartupError()
-            NSApp.terminate(nil)
+            scheduleNativeTermination { NSApp.terminate(nil) }
         }
     }
 
@@ -762,15 +762,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                             let deadline = Date().addingTimeInterval(6)
                             while runningService.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
                             DispatchQueue.main.async {
-                                if !runningService.isRunning { self.updating = false; NSApp.terminate(nil); return }
+                                if !runningService.isRunning { self.updating = false; scheduleNativeTermination { NSApp.terminate(nil) }; return }
                                 self.runUpdaterCLI(["--cancel-update", transaction, token], timeout: 15) { cancellation in
                                     guard cancellation["state"] as? String == "cancelled", cancellation["cancelled"] as? Bool == true else {
                                         self.showUpdateBlocked("无法确认撤销更新；请保持应用打开并联系支持。")
                                         return
                                     }
-                                    if !runningService.isRunning { self.updating = false; NSApp.terminate(nil); return }
+                                    if !runningService.isRunning { self.updating = false; scheduleNativeTermination { NSApp.terminate(nil) }; return }
                                     self.postUpdateLock(false) { unlocked in
-                                        if !runningService.isRunning { self.updating = false; NSApp.terminate(nil); return }
+                                        if !runningService.isRunning { self.updating = false; scheduleNativeTermination { NSApp.terminate(nil) }; return }
                                         guard unlocked else { self.showUpdateBlocked("更新已撤销，但任务锁尚未解除；请保持应用打开并联系支持。 "); return }
                                         self.updating = false
                                         self.webView.evaluateJavaScript("window.dialogueUpdateLock && window.dialogueUpdateLock(false); if (document.getElementById('updatestatus')) document.getElementById('updatestatus').textContent='旧服务未正常退出，更新已安全取消。'", completionHandler: nil)
