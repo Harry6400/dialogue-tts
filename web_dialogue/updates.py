@@ -7,7 +7,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-CURRENT_VERSION = "0.3.2"
+CURRENT_VERSION = "0.3.3"
+MAC_BUILD_NUMBER = "6"
 GITHUB_OWNER = "Harry6400"
 GITHUB_REPO = "dialogue-tts"
 MAC_ASSET_NAME = "DialogueTTS-macOS-arm64.zip"

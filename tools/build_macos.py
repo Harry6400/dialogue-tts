@@ -16,6 +16,7 @@ from package_macos import package_macos
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from web_dialogue.updates import CURRENT_VERSION, MAC_BUILD_NUMBER
 
 
 def main():
@@ -44,7 +45,7 @@ exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='DialogueTTSService', 
     disable_windowed_traceback=False, argv_emulation=False, target_arch='arm64', codesign_identity=None, entitlements_file=None)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='DialogueTTSService')
 app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.github.Harry6400.dialoguetts',
-    info_plist={{'CFBundleDisplayName':'对白', 'CFBundleShortVersionString':'0.3.2', 'CFBundleVersion':'5',
+    info_plist={{'CFBundleDisplayName':'对白', 'CFBundleShortVersionString':{CURRENT_VERSION!r}, 'CFBundleVersion':{MAC_BUILD_NUMBER!r},
     'LSMinimumSystemVersion':'12.0', 'NSHighResolutionCapable':True, 'LSApplicationCategoryType':'public.app-category.utilities'}})
 ''', encoding='utf-8')
     env = dict(os.environ, PYINSTALLER_CONFIG_DIR=str(work / 'cache'))
