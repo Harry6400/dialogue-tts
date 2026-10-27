@@ -15,13 +15,19 @@ class JobsTests(unittest.TestCase):
         self.patch = patch('web_dialogue.app.subprocess.Popen', self.sleep_process)
         self.patch.start()
     def sleep_process(self, *args, **kwargs):
-        return self.original_popen([sys.executable, '-c', 'import time; time.sleep(20)'], **kwargs)
+        # Replace only synthesis workers; taskkill must remain a real subprocess.
+        command = args[0] if args else kwargs.get('args', [])
+        if 'web_dialogue.worker' in command or '--worker' in command:
+            return self.original_popen([sys.executable, '-c', 'import time; time.sleep(20)'], **kwargs)
+        return self.original_popen(*args, **kwargs)
     def tearDown(self):
         self.jobs.close(); self.patch.stop()
     def test_watchdog_without_polling(self):
         job = self.jobs.start(self.script)
         proc = self.jobs.items[job['id']]['process']
-        time.sleep(0.7)
+        deadline = time.monotonic() + 10
+        while proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
         self.assertIsNotNone(proc.poll())
         result = self.jobs.snapshot(job['id'])
         self.assertEqual(result['status'], 'error')

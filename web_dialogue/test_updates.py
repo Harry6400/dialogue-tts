@@ -12,9 +12,14 @@ class UpdateTests(unittest.TestCase):
             with self.subTest(s=s),self.assertRaises(ValueError):version_tuple(s)
     def test_latest(self):
         self.assertEqual(evaluate_release({'tag_name':'v0.1.0'})['state'],'latest')
-    def test_newer_and_mac_asset(self):
-        r=evaluate_release({'tag_name':'v0.2.0','html_url':RELEASES_URL+'/tag/v0.2.0','assets':[{'name':'DialogueTTS-macOS-arm64.zip','browser_download_url':RELEASES_URL+'/download/v0.2.0/DialogueTTS-macOS-arm64.zip'}]})
-        self.assertEqual(r['state'],'available');self.assertIn('download_url',r)
+    def test_newer_and_platform_asset(self):
+        names = {'darwin': 'DialogueTTS-macOS-arm64.zip', 'win32': 'DialogueTTS-Windows-x64.zip'}
+        assets = [{'name': name, 'browser_download_url': RELEASES_URL+'/download/v0.2.0/'+name} for name in names.values()]
+        for platform, expected in names.items():
+            with self.subTest(platform=platform), patch('web_dialogue.updates.sys.platform', platform):
+                r = evaluate_release({'tag_name':'v0.2.0','html_url':RELEASES_URL+'/tag/v0.2.0','assets':assets})
+                self.assertEqual(r['state'], 'available')
+                self.assertEqual(r['download_url'], RELEASES_URL+'/download/v0.2.0/'+expected)
     def test_bad_url_rejected(self):
         for u in ('https://evil.example/x','https://github.com/evil/dialogue-tts/releases/tag/v0.2.0',
                   'https://github.com@evil.example/Harry6400/dialogue-tts/releases/tag/v0.2.0',

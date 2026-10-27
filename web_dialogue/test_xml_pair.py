@@ -6,7 +6,7 @@ from .normalize import normalize,InputError
 FIXTURES=Path(__file__).resolve().parent.parent/'examples'
 
 def payload():
- return {'format':'xml_pair','xml_time_unit':'ms','xml_files':[{'name':n,'content':(FIXTURES/n).read_text()} for n in ('agent_demo.xml','user_demo.xml')]}
+ return {'format':'xml_pair','xml_time_unit':'ms','xml_files':[{'name':n,'content':(FIXTURES/n).read_text(encoding="utf-8")} for n in ('agent_demo.xml','user_demo.xml')]}
 
 class XMLPairTests(unittest.TestCase):
  def test_interleave_and_mute(self):
