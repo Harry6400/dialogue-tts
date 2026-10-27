@@ -15,6 +15,7 @@ from package_sources import export_sources
 from package_macos import package_macos
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 
 def main():

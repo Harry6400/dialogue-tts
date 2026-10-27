@@ -76,6 +76,14 @@ class FoundationTests(unittest.TestCase):
                 with patch.dict(os.environ, {ENV: '.'}):
                     with self.assertRaises(ValueError): verification_root()
 
+    def test_quarantine_uses_native_tool_and_fails_closed(self):
+        from web_dialogue.safe_updater import mark_macos_quarantine
+        with patch('web_dialogue.safe_updater.time.time', return_value=1), patch('subprocess.run') as write, patch('subprocess.check_output', return_value='0083;1;DialogueTTS;\n'):
+            mark_macos_quarantine(Path('/fiction/对白.app'))
+            self.assertEqual(write.call_args.args[0][:3], ['/usr/bin/xattr', '-w', 'com.apple.quarantine'])
+        with patch('subprocess.run'), patch('subprocess.check_output', return_value=''):
+            with self.assertRaises(UpdateError): mark_macos_quarantine(Path('/fiction/对白.app'))
+
     def test_tag_lookup_rejects_untrusted_paths_without_network(self):
         with patch('urllib.request.build_opener') as op:
             for tag in ('v1.2.3/../../latest', 'https://evil', '1.2.3', ''):

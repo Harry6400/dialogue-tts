@@ -37,13 +37,13 @@ class Integration(unittest.TestCase):
   with TemporaryDirectory() as d:
    stage=Path(d)/'stage'; payload=stage/'payload'
    def write(op,offer,path,progress):Path(path).write_bytes(data)
-   with patch.object(g,'make_opener',return_value=object()),patch.object(g,'download_verified',side_effect=write),patch.object(safe,'extract_safe',return_value=payload) as extract,patch.object(safe,'validate_payload') as validate,patch.object(safe.os,'setxattr',create=True):
+   with patch.object(g,'make_opener',return_value=object()),patch.object(g,'download_verified',side_effect=write),patch.object(safe,'extract_safe',return_value=payload) as extract,patch.object(safe,'validate_payload') as validate,patch.object(safe,'mark_macos_quarantine'):
     self.assertEqual(safe.prepare(found,stage),payload);extract.assert_called_once();validate.assert_called_once_with(payload,'0.4.0','darwin')
  def test_download_fallback_only_network(self):
   choice,data,raw=sample()
   with TemporaryDirectory() as d:
    def write(asset,path,progress=None):Path(path).write_bytes(raw if asset['name'].endswith('.sha256') else data)
-   with patch.object(g,'make_opener',return_value=object()),patch.object(g,'download_verified',side_effect=g.NetworkError()),patch.object(s,'matching_github',return_value=choice),patch.object(safe,'download',side_effect=write),patch.object(safe,'extract_safe',return_value=Path(d)/'payload'),patch.object(safe,'validate_payload'),patch.object(safe.os,'setxattr',create=True):
+   with patch.object(g,'make_opener',return_value=object()),patch.object(g,'download_verified',side_effect=g.NetworkError()),patch.object(s,'matching_github',return_value=choice),patch.object(safe,'download',side_effect=write),patch.object(safe,'extract_safe',return_value=Path(d)/'payload'),patch.object(safe,'validate_payload'),patch.object(safe,'mark_macos_quarantine'):
     safe.prepare(choice,Path(d)/'stage')
   with TemporaryDirectory() as d,patch.object(g,'make_opener',return_value=object()),patch.object(g,'download_verified',side_effect=g.ValidationError()),patch.object(s,'matching_github') as fallback:
    with self.assertRaises(g.ValidationError):safe.prepare(choice,Path(d)/'stage')

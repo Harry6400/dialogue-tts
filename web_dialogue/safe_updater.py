@@ -179,6 +179,19 @@ def validate_windows_version(path, version):
         return ctypes.wstring_at(ptr.value,length.value).rstrip('\0')
     if query('ProductName')!='DialogueTTS' or query('InternalName')!='DialogueTTS' or query('FileVersion')!=version: raise UpdateError('Wrong Windows product/version')
 
+def mark_macos_quarantine(payload):
+    # CPython's os.setxattr is a Linux API and is absent on macOS.
+    # Use the system tool to ADD the origin marker and verify it was persisted.
+    value = f'0083;{int(time.time()):x};DialogueTTS;'
+    try:
+        subprocess.run(['/usr/bin/xattr', '-w', 'com.apple.quarantine', value, str(payload)],
+                       check=True, capture_output=True, timeout=10)
+        actual = subprocess.check_output(['/usr/bin/xattr', '-p', 'com.apple.quarantine', str(payload)],
+                                         timeout=10, text=True).strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise UpdateError('无法写入下载来源标记，更新已停止') from exc
+    if actual != value: raise UpdateError('下载来源标记核验失败')
+
 def prepare(offer, stage, progress=None):
     stage=Path(stage);stage.mkdir(mode=0o700,parents=True,exist_ok=False)
     archive=stage/offer['archive']['name']; checksum=stage/offer['checksum']['name']
@@ -199,7 +212,7 @@ def prepare(offer, stage, progress=None):
     validate_payload(payload,offer['version'],offer['platform'])
     if offer['platform']=='darwin':
         # Mark internet-origin code; never remove quarantine or bypass Gatekeeper.
-        os.setxattr(payload,'com.apple.quarantine',f'0083;{int(time.time()):x};DialogueTTS;'.encode())
+        mark_macos_quarantine(payload)
     return payload
 
 def replace_transaction(target, staged, launch_and_verify):
