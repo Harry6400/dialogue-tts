@@ -21,7 +21,7 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s web_dialogue -t . -p "test_*.py" -v
       - name: Run updater transaction tests
-        run: python -m unittest test_safe_updater test_windows_ci_classification -v
+        run: python -m unittest test_safe_updater test_windows_ci_classification test_gitee_provider test_update_sources -v
       - name: Package and verify the Windows application
         run: python tools/build_windows.py
       - name: Retain the real build and verification evidence

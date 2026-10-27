@@ -1,7 +1,8 @@
 """Native-owned update state. UI never supplies a URL, path, version or command."""
 import json, os, shutil, subprocess, sys, threading, uuid, time, secrets
 from pathlib import Path
-from .safe_updater import fetch_release, release_offer, prepare, validate_payload, sha256, UpdateError
+from .safe_updater import prepare, validate_payload, sha256, UpdateError
+from .update_sources import discover
 
 class Updater:
     def __init__(self, target, current_version, state_directory):
@@ -11,8 +12,8 @@ class Updater:
 
     def check(self):
         with self.lock:
-            self.offer=release_offer(fetch_release(),self.version,sys.platform)
-            self.state={'state':self.offer['state'],'latest_version':self.offer.get('version',self.version),'current_version':self.version}
+            self.offer=discover(self.version,sys.platform)
+            self.state={'state':self.offer['state'],'latest_version':self.offer.get('version',self.version),'current_version':self.version,'source':self.offer.get('source')}
             return dict(self.state)
 
     def prepare_confirmed(self):

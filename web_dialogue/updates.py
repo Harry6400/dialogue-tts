@@ -7,7 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-CURRENT_VERSION = "0.3.1"
+CURRENT_VERSION = "0.3.2"
 GITHUB_OWNER = "Harry6400"
 GITHUB_REPO = "dialogue-tts"
 MAC_ASSET_NAME = "DialogueTTS-macOS-arm64.zip"
@@ -67,22 +67,10 @@ def evaluate_release(payload):
 
 def check_update():
     try:
-        request = urllib.request.Request(LATEST_API_URL, headers={
-            "Accept": "application/vnd.github+json", "User-Agent": "DialogueTTS/" + CURRENT_VERSION,
-            "X-GitHub-Api-Version": "2022-11-28",
-        })
-        import certifi
-        context = ssl.create_default_context()
-        context.load_verify_locations(cafile=certifi.where())
-        opener = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=context))
-        with opener.open(request, timeout=8) as response:
-            body = response.read(1024 * 1024 + 1)
-            if len(body) > 1024 * 1024:
-                raise ValueError("Oversized release response")
-        return evaluate_release(json.loads(body.decode("utf-8")))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return {"current_version": CURRENT_VERSION, "state": "unreleased", "message": "尚无可用的正式更新"}
-    except (ValueError, OSError, urllib.error.URLError, UnicodeError):
-        pass
-    return {"current_version": CURRENT_VERSION, "state": "error", "message": "检查失败，请稍后重试"}
+        from .update_sources import discover
+        result=discover(CURRENT_VERSION,sys.platform)
+        result.update(current_version=CURRENT_VERSION,latest_version=result.get('version',CURRENT_VERSION))
+        result['message']='发现新版本' if result['state']=='available' else '已是最新版本'
+        return result
+    except Exception:
+        return {'current_version':CURRENT_VERSION,'state':'error','message':'检查失败，请稍后重试'}

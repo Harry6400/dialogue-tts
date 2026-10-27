@@ -28,12 +28,10 @@ class UpdateTests(unittest.TestCase):
             with self.assertRaises(ValueError):evaluate_release({'tag_name':'v0.4.0','html_url':u})
     def test_prerelease_rejected(self):
         with self.assertRaises(ValueError):evaluate_release({'tag_name':'v0.2.0','prerelease':True})
-    def test_unreleased_and_network_error(self):
-        with patch('web_dialogue.updates.urllib.request.build_opener') as op:
-            op.return_value.open.side_effect=urllib.error.HTTPError('https://api.github.com',404,'Not Found',None,None)
-            self.assertEqual(check_update()['state'],'unreleased')
-            op.return_value.open.side_effect=TimeoutError()
+    def test_failure_is_not_reported_as_latest(self):
+        with patch('web_dialogue.update_sources.discover', side_effect=ValueError('bad metadata')):
             self.assertEqual(check_update()['state'],'error')
+
 
 
 if __name__ == '__main__':unittest.main()

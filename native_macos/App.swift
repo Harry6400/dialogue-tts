@@ -302,6 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var closing = false
     private var updating = false
     private var offeredUpdate: String?
+    private var offeredUpdateIdentity: String?
     private let savedDownloads = SavedDownloadRegistry()
     private let folderState = FolderState()
     private var downloadSources: [ObjectIdentifier: String] = [:]
@@ -586,10 +587,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         if method == "install_update" { installUpdate(version, reply: reply); return }
         guard method == "check_for_update", !updating else { reply(["state": "error", "message": "更新正在进行"]); return }
         offeredUpdate = nil
+        offeredUpdateIdentity = nil
         runUpdaterCLI(["--update-check", version]) { [weak self] result in
             if result["state"] as? String == "available", let candidate = result["latest_version"] as? String,
-               candidate.range(of: "^[0-9]+\\.[0-9]+\\.[0-9]+$", options: .regularExpression) != nil { self?.offeredUpdate = candidate }
-            reply(result)
+               let identity = result["identity"] as? String, identity.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+               candidate.range(of: "^[0-9]+\\.[0-9]+\\.[0-9]+$", options: .regularExpression) != nil { self?.offeredUpdate = candidate; self?.offeredUpdateIdentity = identity }
+            var publicResult = result; publicResult.removeValue(forKey: "identity"); reply(publicResult)
         }
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -629,7 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         }.resume()
     }
     private func installUpdate(_ version: String, reply: @escaping ([String: Any]) -> Void) {
-        guard !updating, let offered = offeredUpdate, let runningService = service, runningService.isRunning,
+        guard !updating, let offered = offeredUpdate, let identity = offeredUpdateIdentity, let runningService = service, runningService.isRunning,
               trustedDownloads.isEmpty, saveWaiters.isEmpty else { reply(["state": "error", "message": "请先完成任务并保存所有结果，再检查更新。"]); return }
         updating = true
         webView.evaluateJavaScript("window.dialogueUpdateSafety && window.dialogueUpdateSafety()") { [weak self] result, error in
@@ -650,7 +653,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                             self.updating = false; reply(["state": "error", "message": "无法安全锁定任务，请稍后重试。"]) }; return
                     }
                     self.webView.evaluateJavaScript("window.dialogueUpdateLock && window.dialogueUpdateLock(true)", completionHandler: nil)
-                    let arguments = ["--update-install", Bundle.main.bundleURL.path, version, offered, String(ProcessInfo.processInfo.processIdentifier), String(runningService.processIdentifier)]
+                    let arguments = ["--update-install", Bundle.main.bundleURL.path, version, offered, String(ProcessInfo.processInfo.processIdentifier), String(runningService.processIdentifier), identity]
                     self.runUpdaterCLI(arguments) { result in
                         guard result["state"] as? String == "waiting_for_exit" else {
                             self.postUpdateLock(false) { unlocked in
