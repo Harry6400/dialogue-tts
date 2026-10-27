@@ -35,6 +35,10 @@ class InvalidVoiceTests(unittest.TestCase):
             self.assertIn('音色无效',batch['groups'][0]['error'])
 
 class NamedAddressTests(unittest.TestCase):
+    def test_matching_is_enabled_when_setting_is_omitted(self):
+        result=normalize({'format':'xml_pair','xml_files':[f(xml('AGENT',text='张先生您好')),f(xml('USER'))]})
+        self.assertEqual(result['voice_choice']['user'],'zh-CN-YunxiNeural')
+
     def test_named_address_changes_final_voice_and_fingerprint(self):
         base={'format':'xml_pair','xml_files':[f(xml('AGENT',text='张先生您好')),f(xml('USER'))], 'auto_voice':True}
         automatic=normalize(base)

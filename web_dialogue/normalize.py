@@ -43,7 +43,7 @@ def normalize(payload, catalog=None):
             raise InputError("角色音色映射必须是对象。")
         mapping = {"AGENT": VOICES[0]["id"], "USER": VOICES[1]["id"], **configured}
         from .honorific import direct_address
-        auto = payload.get('auto_voice', False)
+        auto = payload.get('auto_voice', True)
         manual = payload.get('manual_user_voice', False)
         if not isinstance(auto, bool) or not isinstance(manual, bool):
             raise InputError('音色匹配设置无效。')

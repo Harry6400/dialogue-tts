@@ -408,7 +408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
-    func windowShouldClose(_ sender: NSWindow) -> Bool { if !updating { NSApp.terminate(nil) }; return false }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { if closeApproved { return true }; if !updating && !closing { NSApp.terminate(nil) }; return false }
 
     func windowWillClose(_ notification: Notification) { clearSaveState() }
 
@@ -435,22 +435,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                   let running = safety["running"] as? Bool, let saving = safety["saving"] as? Bool,
                   let unsaved = safety["unsaved"] as? Bool else {
                 let alert = NSAlert(); alert.messageText = "暂时无法确认任务和保存状态"
-                alert.informativeText = "请等待页面完成操作后再退出，已有结果保持可恢复。"; alert.runModal(); return
+                alert.informativeText = "请等待页面完成操作后再退出，已有结果保持可恢复。"; alert.runModal(); NSApp.reply(toApplicationShouldTerminate: false); return
             }
             if saving || !self.trustedDownloads.isEmpty || !self.saveWaiters.isEmpty {
-                let alert = NSAlert(); alert.messageText = "正在保存音频"; alert.informativeText = "请等待保存完成后再退出。"; alert.runModal(); return
+                let alert = NSAlert(); alert.messageText = "正在保存音频"; alert.informativeText = "请等待保存完成后再退出。"; alert.runModal(); NSApp.reply(toApplicationShouldTerminate: false); return
             }
             if unsaved {
                 let alert = NSAlert(); alert.messageText = "还有未保存的音频"
                 alert.informativeText = running ? "退出将停止正在合成的任务，并丢弃未保存的临时音频。" : "退出后，未保存的临时音频将被清理。"
                 alert.addButton(withTitle: "返回保存"); alert.addButton(withTitle: "放弃并退出"); alert.addButton(withTitle: "取消退出")
                 let answer = alert.runModal()
-                if answer == .alertFirstButtonReturn { self.webView.evaluateJavaScript("window.dialogueShowUnsaved && window.dialogueShowUnsaved()", completionHandler: nil); return }
-                guard answer == .alertSecondButtonReturn else { return }
+                if answer == .alertFirstButtonReturn { self.webView.evaluateJavaScript("window.dialogueShowUnsaved && window.dialogueShowUnsaved()", completionHandler: nil); NSApp.reply(toApplicationShouldTerminate: false); return }
+                guard answer == .alertSecondButtonReturn else { NSApp.reply(toApplicationShouldTerminate: false); return }
             } else if running {
                 let alert = NSAlert(); alert.messageText = "停止合成并退出？"; alert.informativeText = "正在运行的任务将停止。"
                 alert.addButton(withTitle: "停止并退出"); alert.addButton(withTitle: "取消退出")
-                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                guard alert.runModal() == .alertFirstButtonReturn else { NSApp.reply(toApplicationShouldTerminate: false); return }
             }
             self.closing = true
             self.clearSaveState()
@@ -460,15 +460,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
                 if process.isRunning { kill(process.processIdentifier, SIGKILL) }
                 process.waitUntilExit()
-                DispatchQueue.main.async { self.closeApproved = true; NSApp.terminate(nil) }
+                DispatchQueue.main.async { self.closeApproved = true; NSApp.reply(toApplicationShouldTerminate: true) }
             }
         }
         webView.evaluateJavaScript("window.dialogueCloseSafety && window.dialogueCloseSafety()") { result, error in
             if error == nil, let state = result as? [String: Any] { finish(state) } else { finish(nil) }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish(nil) }
-        // AppKit must continue processing the asynchronous page reply and native alert.
-        return .terminateCancel
+        // AppKit resumes only after the page reply, prompt and service shutdown.
+        return .terminateLater
     }
 
     private func isLocal(_ url: URL) -> Bool {

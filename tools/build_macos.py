@@ -7,6 +7,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 from collect_licenses import collect
@@ -58,6 +59,7 @@ app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.
         info = plistlib.load(stream)
     info['CFBundleExecutable'] = 'DialogueTTS'
     info['CFBundleName'] = '对白'
+    info.pop('LSBackgroundOnly', None)
     info['NSAppTransportSecurity'] = {'NSAllowsLocalNetworking': True}
     with plist_path.open('wb') as stream:
         plistlib.dump(info, stream)
@@ -91,6 +93,10 @@ app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.
     export_sources(ROOT, stage / 'DialogueTTS-Source.zip')
     archive = out / 'DialogueTTS-macOS-arm64.zip'
     package_macos(stage, archive)
+    from web_dialogue.safe_updater import extract_safe, validate_payload
+    with tempfile.TemporaryDirectory(prefix='dialogue-built-archive-') as check:
+        extracted = extract_safe(archive, Path(check) / 'payload', 'darwin')
+        validate_payload(extracted, info['CFBundleShortVersionString'], 'darwin')
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (out / (archive.name + '.sha256')).write_text(digest + '  ' + archive.name + '\n', encoding='utf-8')
     app_bytes = sum(file.stat().st_size for file in app.rglob('*') if file.is_file() and not file.is_symlink())
