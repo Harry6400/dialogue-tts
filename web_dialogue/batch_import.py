@@ -1,6 +1,5 @@
 """Bounded, local-only batch preview. Identity metadata never leaves this module."""
 import hashlib
-import json
 import xml.etree.ElementTree as ET
 
 from defusedxml.ElementTree import fromstring
@@ -32,7 +31,7 @@ def preview_batch(payload):
         raise InputError('批次参数必须是对象。')
     files = payload.get('files')
     if not isinstance(files, list) or not 1 <= len(files) <= MAX_FILES:
-        raise InputError('每批请选择1–40份JSON或XML文件。')
+        raise InputError('每批请选择1–40份XML文件。')
     total = 0
     for item in files:
         if not isinstance(item, dict) or not isinstance(item.get('name'), str) or not isinstance(item.get('content'), str):
@@ -43,7 +42,7 @@ def preview_batch(payload):
         total += size
     if total > MAX_BATCH_BYTES:
         raise InputError('每批文件总计最多6MB。')
-    options = {key: payload[key] for key in ('array_path', 'speaker_key', 'text_key', 'rate', 'pause_ms', 'xml_time_unit', 'voices') if key in payload}
+    options = {key: payload[key] for key in ('rate', 'pause_ms', 'xml_time_unit', 'voices') if key in payload}
     configured = options.get('voices', {})
     if not isinstance(configured, dict):
         raise InputError('角色音色映射必须是对象。')
@@ -59,8 +58,8 @@ def preview_batch(payload):
                     identities.setdefault((ref, start), []).append(i)
             except InputError as exc:
                 errors[i] = str(exc)
-        elif not item['name'].lower().endswith('.json'):
-            errors[i] = '仅支持JSON或XML文件。'
+        else:
+            errors[i] = '仅支持XML文件；JSON输入已移除。'
     for indices in hashes.values():
         if len(indices) > 1:
             for i in indices:
@@ -109,14 +108,7 @@ def preview_batch(payload):
                 candidate = {**options, 'format': 'xml_pair', 'xml_files': [
                     {'name': f'声道{j + 1}.xml', 'content': files[i]['content']} for j, i in enumerate(indices)]}
             else:
-                i = indices[0]
-                if i in metadata:
-                    raise InputError('XML缺少配对声道或完整通话时间标识；请明确配对或排除此项。')
-                try:
-                    data = json.loads(files[i]['content'].lstrip('\ufeff'))
-                except (ValueError, RecursionError):
-                    raise InputError('JSON格式无效。')
-                candidate = {**options, 'data': data}
+                raise InputError('XML缺少配对声道或完整通话时间标识；请明确配对或排除此项。')
             group['preview'] = normalize(candidate)
             group['status'] = 'ready'
         except (InputError, RecursionError) as exc:

@@ -53,8 +53,8 @@ def parse_xml_pair(payload):
         if sum(1 for _ in root.iter()) > 10000:
             raise XMLImportError('XML节点过多，请缩小文件。')
         role = (root.findtext('./callInfo/role') or '').strip()
-        if not role or len(role) > 80:
-            raise XMLImportError('XML缺少有效callInfo/role声道标记，不能猜测说话人。')
+        if role not in {'AGENT', 'USER'}:
+            raise XMLImportError('XML声道标记必须为 AGENT 或 USER，不能猜测说话人。')
         if role in roles:
             raise XMLImportError('两份XML的role相同，请检查是否重复选择了同一声道。')
         roles.append(role)

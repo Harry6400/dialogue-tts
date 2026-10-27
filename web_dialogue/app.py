@@ -17,7 +17,13 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from .normalize import EXAMPLE, VOICES, InputError, normalize
+from .normalize import VOICES, InputError, normalize
+from .xml_example import XML_EXAMPLE
+
+def normalize_source(payload):
+    if not isinstance(payload, dict) or payload.get("format") != "xml_pair" or "data" in payload:
+        raise InputError("仅支持双声道 XML 输入。")
+    return normalize(payload)
 
 MAX_BODY = 6 * 1024 * 1024
 ROOT = Path(__file__).resolve().parent.parent
@@ -221,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
             from .updates import check_update
             return self.json(check_update())
         if path == "/api/config":
-            return self.json({"token": self.server.token, "voices": VOICES, "example": EXAMPLE, "can_shutdown": getattr(self.server, "can_shutdown", False)})
+            return self.json({"token": self.server.token, "voices": VOICES, "xml_example": XML_EXAMPLE, "can_shutdown": getattr(self.server, "can_shutdown", False)})
         parts = path.strip("/").split("/")
         if len(parts) in (3, 4, 5) and parts[:2] == ["api", "batches"]:
             try:
@@ -327,11 +333,11 @@ class Handler(BaseHTTPRequestHandler):
                         raise InputError('请确认将脱敏文本发送至微软语音服务。')
                     return self.json(self.server.batches.retry(batch_parts[2]))
             if path == "/api/preview":
-                return self.json(normalize(payload))
+                return self.json(normalize_source(payload))
             if path == "/api/jobs":
                 if not isinstance(payload, dict) or payload.get("consent") is not True:
                     raise InputError("请先确认：生成时会将脱敏后的文本发送至微软语音服务。")
-                script = normalize(payload)["script"]
+                script = normalize_source(payload)["script"]
                 return self.json(self.server.jobs.start(script, payload.get("request_id")), 202)
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "cancel":
@@ -341,7 +347,7 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(exc, InputError):
                 message = str(exc)
             else:
-                message = "JSON 格式无效，请检查引号、逗号和括号。"
+                message = "请求格式无效，请重新载入 XML 后重试。"
             return self.json({"error": message}, 400)
         except KeyError as exc:
             return self.json({"error": str(exc)}, 404)

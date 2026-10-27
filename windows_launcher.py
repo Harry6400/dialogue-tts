@@ -10,6 +10,79 @@ import urllib.request
 import webbrowser
 
 
+class NativeDownloads:
+    """Only app-owned successful saves may be revealed; JS never supplies a path."""
+    def __init__(self, base):
+        self._base = base
+        self._window = None
+        self._saved = {}
+        self._lock = threading.Lock()
+
+    def save_download(self, route):
+        import re
+        import tempfile
+        import uuid
+        if not isinstance(route, str) or not re.fullmatch(r'/api/(?:jobs/[a-f0-9]{32}/audio|batches/[a-f0-9]{32}/(?:zip|audio/[0-9]{3}))', route):
+            return {'ok': False, 'error': '下载地址无效'}
+        if not self._lock.acquire(blocking=False):
+            return {'ok': False, 'error': '请先完成当前保存'}
+        temporary = None
+        try:
+            import webview
+            is_zip = route.endswith('/zip')
+            name = 'dialogues.zip' if is_zip else ('dialogue-' + route.rsplit('/', 1)[1] + '.mp3' if '/batches/' in route else 'dialogue.mp3')
+            chosen = self._window.create_file_dialog(webview.FileDialog.SAVE, save_filename=name,
+                file_types=('ZIP (*.zip)',) if is_zip else ('MP3 (*.mp3)',))
+            if not chosen:
+                return {'ok': False, 'cancelled': True}
+            target = Path(chosen[0]).absolute()
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, *args, **kwargs): return None
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+            limit = 256 * 1024 * 1024
+            with opener.open(self._base + route, timeout=30) as response:
+                if response.headers.get_content_type() != ('application/zip' if is_zip else 'audio/mpeg'):
+                    raise ValueError('Invalid audio response')
+                expected = int(response.headers.get('Content-Length', '-1'))
+                if not 0 < expected <= limit: raise ValueError('Invalid download size')
+                fd, temporary = tempfile.mkstemp(prefix='.dialogue-save-', dir=str(target.parent))
+                size = 0
+                with os.fdopen(fd, 'wb') as output:
+                    while True:
+                        block = response.read(65536)
+                        if not block: break
+                        size += len(block)
+                        if size > limit or size > expected: raise ValueError('Oversized download')
+                        output.write(block)
+                    output.flush(); os.fsync(output.fileno())
+                if size != expected: raise ValueError('Incomplete download')
+            os.replace(temporary, target); temporary = None
+            ident = uuid.uuid4().hex
+            self._saved[ident] = target
+            record = {'save_id': ident, 'name': target.name, 'path': str(target)}
+            try:
+                self._window.evaluate_js('window.dialogueNativeSaved && window.dialogueNativeSaved(' + json.dumps(record, ensure_ascii=True) + ')')
+            except Exception:
+                pass  # Saved on disk even if the window has just closed.
+            return {'ok': True, **record}
+        except Exception:
+            return {'ok': False, 'error': '保存失败，请重试'}
+        finally:
+            if temporary:
+                Path(temporary).unlink(missing_ok=True)
+            self._lock.release()
+
+    def reveal_saved(self, save_id):
+        if not isinstance(save_id, str): return {'ok': False}
+        target = self._saved.get(save_id)
+        if target is None or not target.is_file(): return {'ok': False, 'error': '保存记录不存在'}
+        try:
+            os.startfile(str(target.parent), 'explore')
+            return {'ok': True}
+        except OSError:
+            return {'ok': False, 'error': '无法打开文件夹'}
+
+
 def self_test(report_path, live=False):
     """CI packaging smoke test. Does not open a browser or use private input."""
     from web_dialogue.app import make_server
@@ -26,14 +99,14 @@ def self_test(report_path, live=False):
         with urllib.request.urlopen(base, timeout=10) as response:
             html = response.read()
         report["ui_asset"] = b"<html" in html and len(html) > 5000
-        data = {"data": config["example"][:2], "array_path": "", "speaker_key": "speaker", "text_key": "text", "rate": 1, "pause_ms": 250,
-                "voices": {"A": "zh-CN-XiaoxiaoNeural", "B": "zh-CN-XiaoyiNeural"}, "consent": True}
+        data = {"format":"xml_pair", "xml_files":config["xml_example"], "xml_time_unit":"ms", "rate":1, "pause_ms":250,
+                "voices":{"AGENT":"zh-CN-XiaoxiaoNeural", "USER":"zh-CN-XiaoyiNeural"}, "consent":True}
         def post(path, payload):
             request = urllib.request.Request(base + path, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json", "X-App-Token": config["token"]})
             with urllib.request.urlopen(request, timeout=10) as response:
                 return json.load(response)
         preview = post("/api/preview", data)
-        report["preview"] = len(preview["rows"]) == 2
+        report["preview"] = len(preview["rows"]) == 5 and preview["muted_count"] == 1
         if live:
             cancelled_job = post("/api/jobs", data)
             time.sleep(0.3)
@@ -54,6 +127,20 @@ def self_test(report_path, live=False):
                     report["live_audio_frames"] = len(parse_frames(audio))
                     report["live_synthesis"] = report["live_audio_frames"] > 20
                     Path(report_path).with_suffix(".mp3").write_bytes(audio)
+                    import tempfile
+                    from types import SimpleNamespace
+                    from unittest.mock import patch
+                    with tempfile.TemporaryDirectory() as folder:
+                        target = Path(folder) / 'saved.mp3'
+                        callbacks = []
+                        bridge = NativeDownloads(base)
+                        bridge._window = SimpleNamespace(create_file_dialog=lambda *a, **k: (str(target),), evaluate_js=callbacks.append)
+                        with patch.dict(sys.modules, {'webview': SimpleNamespace(FileDialog=SimpleNamespace(SAVE=30))}):
+                            saved = bridge.save_download(status['download_url'])
+                        with patch('os.startfile', create=True) as reveal:
+                            opened = bridge.reveal_saved(saved.get('save_id'))
+                            report['native_save_reveal'] = bool(saved.get('ok') and target.read_bytes() == audio and callbacks and opened.get('ok') and reveal.call_args.args[0] == str(target.parent) and not bridge.reveal_saved('unknown').get('ok'))
+                        if not report['native_save_reveal']: raise RuntimeError('Native save/reveal test failed')
                     break
                 if status["status"] in {"error", "cancelled"}:
                     raise RuntimeError(status.get("error", status["status"]))
@@ -113,12 +200,14 @@ def run_window(gui_report=None):
     server.can_shutdown = False
     service = threading.Thread(target=server.serve_forever, daemon=True)
     service.start()
-    webview.settings['ALLOW_DOWNLOADS'] = True
+    webview.settings['ALLOW_DOWNLOADS'] = False
     webview.settings['ALLOW_FILE_URLS'] = False
     webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER'] = True
     webview.settings['IGNORE_SSL_ERRORS'] = False
     url = f"http://127.0.0.1:{server.server_address[1]}"
-    window = webview.create_window('对白', url, width=1180, height=840, min_size=(760,620), background_color='#F5F7F8')
+    downloads = NativeDownloads(url)
+    window = webview.create_window('对白', url, js_api=downloads, width=1180, height=840, min_size=(760,620), background_color='#F5F7F8')
+    downloads._window = window
     report = {'frozen':bool(getattr(sys,'frozen',False)), 'platform':sys.platform, 'passed':False}
     def closing():
         if gui_report: return True
@@ -141,7 +230,7 @@ def run_window(gui_report=None):
                 while time.monotonic()<deadline:
                     result = window.evaluate_js("JSON.stringify({title:document.title, rows:document.querySelectorAll('#preview .line').length, roles:document.querySelectorAll('#voices select').length, update:!!document.getElementById('checkupdate')})")
                     state = json.loads(result)
-                    if state['rows'] == 6 and state['roles'] == 2:
+                    if state['rows'] == 5 and state['roles'] == 2:
                         report.update(state)
                         report['passed']=state['update']
                         break

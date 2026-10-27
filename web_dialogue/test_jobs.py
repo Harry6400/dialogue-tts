@@ -4,7 +4,8 @@ import time
 import unittest
 from unittest.mock import patch
 from .app import Jobs
-from .normalize import EXAMPLE, InputError, normalize
+from .normalize import InputError, normalize
+from .test_normalize import EXAMPLE
 
 
 class JobsTests(unittest.TestCase):

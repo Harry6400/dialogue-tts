@@ -1,7 +1,16 @@
 import copy
 import unittest
-from .normalize import EXAMPLE, InputError, normalize
+from .normalize import InputError, normalize
 
+
+EXAMPLE = [
+    {"speaker": "A", "text": "你好，我想订一个明天下午两点的会议室。"},
+    {"speaker": "B", "text": "可以，请问大约有几位参加，需要投影设备吗？"},
+    {"speaker": "A", "text": "一共六位，需要投影，另外准备一些饮用水就好。"},
+    {"speaker": "B", "text": "好的，已经记下。会议预计持续多久呢？"},
+    {"speaker": "A", "text": "大概一个小时，如果提前结束，我会通知你。"},
+    {"speaker": "B", "text": "没问题，明天下午见。"},
+]
 
 class NormalizeTests(unittest.TestCase):
     def test_named_role_defaults_independent_of_order(self):

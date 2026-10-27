@@ -1,12 +1,12 @@
-# 对白配音 · Windows / Mac 独立应用
+# 对白 · XML → MP3 · Windows / Mac
 
-在浏览器式界面中导入 JSON、固定角色音色，再导出一段 MP3。两个桌面版本使用同一份自有服务与界面源码。
+在紧凑桌面界面导入双声道 XML，固定角色音色，逐通导出 MP3。两个桌面版本使用同一份自有服务与界面源码。
 
 ## 给使用者
 
 打开构建后的 Windows 应用或 Mac `.app` 即可。应用自动打开电脑的默认浏览器，后台只监听本机临时端口；不需要另配服务器、安装 Python、下载模型或安装 FFmpeg。
 
-**音频由微软在线服务生成，仍然需要联网。** 只有确认发送后才将脱敏文本交给微软；预览不触达微软。原始 JSON 不写回、不改写，不克隆原录音中的真实声音。
+**音频由微软在线服务生成，仍然需要联网。** 只有确认发送后才将脱敏文本交给微软；预览不触达微软。原始 XML 不写回、不改写，不克隆原录音中的真实声音。
 
 下载音频后，点击右上角“退出应用”结束后台并清理临时文件。仅关闭网页标签不会退出后台。
 
@@ -39,13 +39,7 @@ python -m PyInstaller --noconfirm --onedir --windowed --name 'DialogueTTS' \
 
 ## 格式
 
-顶层数组默认接受：
-
-```json
-[{"speaker":"A","text":"你好。"},{"speaker":"B","text":"你好，请问需要什么帮助？"}]
-```
-
-支持点分隔字段路径：例如数组 `data.turns`、说话人 `person.id`、文本 `content`。数组的原顺序保留，角色音色固定。默认两种不同普通话女声“晓晓”和“晓伊”，也可逐角色更改。
+只接受 analyze / subject / function 结构的双声道 XML；text 为文本、time 为起止时间，callInfo/role 必须为 AGENT 或 USER。默认 AGENT 用晓晓、USER 用晓伊，均为普通话女声，可分别更改。没有字段映射或粘贴 JSON 入口。
 
 一次最多100段、总20000字符、每段5000字符。语速0.5–2倍，停顿0–3000ms。新音频与新时间轴不等于原录音时长/时间戳。
 
@@ -78,6 +72,6 @@ DTD、实体、外部引用被拒绝；使用 defusedxml 0.7.1（PSF许可，见
 
 ## Mac 原生窗口构建
 
-Mac 最终入口为 native_macos/App.swift，使用系统 AppKit / WKWebView 打开应用自己的窗口；mac_launcher.py 仅作为内置 Python 服务，不打开默认浏览器。后台只监听 127.0.0.1 随机端口，关窗时退出服务并清理任务。JSON/XML 选择、MP3 保存使用系统文件面板；应用内拒绝外域导航，官方 GitHub 更新页由系统浏览器打开。
+Mac 最终入口为 native_macos/App.swift，使用系统 AppKit / WKWebView 打开应用自己的窗口；mac_launcher.py 仅作为内置 Python 服务，不打开默认浏览器。后台只监听 127.0.0.1 随机端口，关窗时退出服务并清理任务。XML 选择、MP3 保存使用系统文件面板；应用内拒绝外域导航，官方 GitHub 更新页由系统浏览器打开。
 
 Apple Silicon、macOS 12 或更新版本，安装 Swift Command Line Tools。安装 web_dialogue/requirements.txt 和 PyInstaller 后运行 python tools/build_macos.py。脚本只构建并静态验证，不启动最终应用。分发包包含实际依赖许可证与可重建源码，无 FFmpeg、语音模型或 Chromium。

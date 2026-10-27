@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 import tempfile
 import threading
@@ -8,6 +7,7 @@ from unittest.mock import patch
 import zipfile
 from .batches import Batches
 from .normalize import InputError
+from .test_batch_import import xml, f
 
 class FakeJobs:
     def __init__(self):
@@ -26,7 +26,7 @@ class BatchTests(unittest.TestCase):
     def setUp(self): self.jobs=FakeJobs(); self.b=Batches(self.jobs)
     def tearDown(self): self.b.close();self.jobs.temp.cleanup()
     def payload(self, texts=('good','bad')):
-        return {'files':[{'name':f'../../secret{i}.json','content':json.dumps([{'speaker':'A','text':t}])} for i,t in enumerate(texts)],'consent':True,'request_id':'request-123'}
+        return {'files':[f(xml(role, ref=f'fictional-{i}', text=t if role=='AGENT' else '答复'), f'../../source-{i}-{role}.xml') for i,t in enumerate(texts) for role in ('AGENT','USER')], 'consent':True,'request_id':'request-123'}
     def finish(self, ident):
         deadline=time.monotonic()+5
         while self.b.active and time.monotonic()<deadline: time.sleep(.01)
@@ -109,10 +109,20 @@ class BatchTests(unittest.TestCase):
         for handle in leases:handle.close()
         self.finish(self.b.start(p)['id'])
 
+    def test_excluded_group_preserves_public_number_and_filename(self):
+        p=self.payload(('good','good'));p['excluded']=['g0_1']
+        ident=self.b.start(p)['id'];result=self.finish(ident)
+        self.assertEqual(result['items'][0]['name'],'对话002')
+        self.assertEqual(result['items'][0]['filename'],'dialogue-002.mp3')
+        self.assertTrue(result['items'][0]['download_url'].endswith('/002'))
+        handle,name,_=self.b.open_output(ident,'002');handle.close()
+        self.assertEqual(name,'dialogue-002.mp3')
+        with zipfile.ZipFile(self.b.output(ident)) as z:self.assertEqual(z.namelist(),['dialogue-002.mp3'])
+
     def test_invalid_groups_exclusion(self):
-        p=self.payload();p['files'][1]['content']='not json'
+        p=self.payload();p['files'][2]['content']='not xml'
         with self.assertRaises(InputError):self.b.start(p)
-        p['excluded']=['g1'];ident=self.b.start(p)['id']
+        p['excluded']=['g2','g3'];ident=self.b.start(p)['id']
         self.assertEqual(self.finish(ident)['completed'],1)
     def test_parallel_batch_guard(self):
         self.jobs.wait=True;ident=self.b.start(self.payload())['id']

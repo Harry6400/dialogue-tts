@@ -87,9 +87,9 @@ class Batches:
             ident = uuid.uuid4().hex
             (self.root / ident).mkdir(mode=0o700)
             self.items[ident] = {'id': ident, 'status': 'queued', 'cancel': False, 'generation': 0,
-                'items': [{'id': g['id'], 'name': f'对话{i+1:03d}', 'status': 'queued',
+                'items': [{'id': g['id'], 'name': g['name'], 'status': 'queued',
                     'completed': 0, 'total': len(g['preview']['script']['lines']),
-                    'script': g['preview']['script'], 'number': i + 1} for i,g in enumerate(groups)]}
+                    'script': g['preview']['script'], 'number': preview['groups'].index(g) + 1} for i,g in enumerate(groups)]}
             self.requests[request] = (ident, digest)
             self._launch(ident)
             return self.snapshot(ident)
@@ -167,6 +167,7 @@ class Batches:
                 if r.get('error'): out['error'] = r['error']
                 if r['status'] == 'done':
                     out['download_url'] = f'/api/batches/{ident}/audio/{r["number"]:03d}'
+                    out['filename'] = f'dialogue-{r["number"]:03d}.mp3'
                 rows.append(out)
             result = {'id':ident, 'status':batch['status'], 'items':rows,
                       'completed':sum(r['status'] == 'done' for r in rows), 'total':len(rows)}
@@ -226,7 +227,7 @@ class Batches:
             target = self.output(ident, number)
             handle = target.open('rb')
             self.leases[target] = self.leases.get(target, 0) + 1
-            return DownloadLease(self, target, handle), ('dialogues.zip' if number is None else target.name), target.stat().st_size
+            return DownloadLease(self, target, handle), ('dialogues.zip' if number is None else f'dialogue-{number}.mp3'), target.stat().st_size
 
     def _reap_retired(self):
         for folder in self.retired[:]:

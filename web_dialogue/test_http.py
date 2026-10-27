@@ -5,7 +5,8 @@ import urllib.error
 import urllib.request
 from unittest.mock import patch
 from .app import make_server
-from .normalize import EXAMPLE
+from .xml_example import XML_EXAMPLE
+XML_PAYLOAD={"format":"xml_pair", "xml_files":XML_EXAMPLE}
 
 
 class HTTPTests(unittest.TestCase):
@@ -39,37 +40,48 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(h['X-Frame-Options'], 'DENY')
 
     def test_preview_no_synthesis(self):
-        status, body, _ = self.request('/api/preview', {'data': EXAMPLE})
+        status, body, _ = self.request('/api/preview', XML_PAYLOAD)
         self.assertEqual(status, 200)
-        self.assertEqual(len(json.loads(body)['rows']), 6)
+        self.assertEqual(len(json.loads(body)['rows']), 5)
         self.assertEqual(len(self.s.jobs.items), 0)
 
     def test_origin_and_token_and_host(self):
         for headers in ({'Origin':'https://evil.example'}, {'X-App-Token':'wrong'}, {'Host':'evil.example'}):
-            status, _, _ = self.request('/api/preview', {'data':EXAMPLE}, headers)
+            status, _, _ = self.request('/api/preview', XML_PAYLOAD, headers)
             self.assertEqual(status, 403)
 
     def test_no_consent_no_task(self):
-        status, _, _ = self.request('/api/jobs', {'data': EXAMPLE})
+        status, _, _ = self.request('/api/jobs', XML_PAYLOAD)
         self.assertEqual(status, 400)
         self.assertEqual(len(self.s.jobs.items), 0)
 
     def test_invalid_input(self):
         status, body, _ = self.request('/api/preview', {'data':[{'speaker':'A'}]})
         self.assertEqual(status, 400)
-        self.assertIn('第 1 条', json.loads(body)['error'])
+        self.assertIn('XML', json.loads(body)['error'])
 
     def test_batch_preview_auth_and_consent(self):
-        payload = {'files': [{'name':'a.json', 'content': json.dumps(EXAMPLE)},
-                             {'name':'b.json', 'content': json.dumps(EXAMPLE)}]}
+        payload = {'files': XML_EXAMPLE}
         status, body, _ = self.request('/api/batches/preview', payload)
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)['counts']['ready'], 2)
+        self.assertEqual(json.loads(body)['counts']['ready'], 1)
         self.assertEqual(self.request('/api/batches',payload)[0],400)
         self.assertEqual(self.request('/api/batches/preview',payload,{'Origin':'https://evil.example'})[0],403)
         self.assertEqual(self.request('/api/batches/unknown/retry',{})[0],400)
         self.assertEqual(self.request('/api/batches/unknown')[0],404)
         self.assertEqual(self.request('/api/batches/unknown/audio/../../../etc/passwd')[0],404)
+
+    def test_json_source_rejected_at_all_public_entrypoints(self):
+        raw={'data':[{'speaker':'A','text':'不能作为输入'}], 'consent':True}
+        for path in ('/api/preview','/api/jobs'):
+            self.assertEqual(self.request(path,raw)[0],400)
+        mixed={**XML_PAYLOAD,**raw}
+        self.assertEqual(self.request('/api/preview',mixed)[0],400)
+        batch={'files':[{'name':'input.json','content':'[]'}],'consent':True,'request_id':'json-rejected'}
+        self.assertEqual(self.request('/api/batches',batch)[0],400)
+        config=json.loads(self.request('/api/config')[1])
+        self.assertNotIn('example',config)
+        self.assertEqual(len(config['xml_example']),2)
 
     def test_unknown_job_and_path(self):
         self.assertEqual(self.request('/api/jobs/unknown')[0],404)

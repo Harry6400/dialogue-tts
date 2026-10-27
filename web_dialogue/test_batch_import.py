@@ -66,30 +66,29 @@ class BatchImportTests(unittest.TestCase):
 
     def test_xxe_is_per_file_error(self):
         evil = '<!DOCTYPE analyze [<!ENTITY a SYSTEM "file:///etc/passwd">]>' + xml('AGENT')
-        r = preview_batch({'files': [f(evil), f('[{"speaker":"A","text":"好"}]', 'ok.json')]})
+        r = preview_batch({'files': [f(evil), f(xml('AGENT', 'other')), f(xml('USER', 'other'))]})
         self.assertEqual(r['counts'], {'ready': 1, 'error': 1})
 
-    def test_json_common_mapping_and_stable_voices(self):
-        files = [f(json.dumps({'turns': [{'who': 'B', 'words': '一'}, {'who': 'A', 'words': '二'}]}), 'a.json'),
-                 f(json.dumps({'turns': [{'who': 'A', 'words': '三'}, {'who': 'B', 'words': '四'}]}), 'b.json')]
-        r = preview_batch({'files': files, 'array_path': 'turns', 'speaker_key': 'who', 'text_key': 'words'})
-        self.assertEqual(r['counts']['ready'], 2)
+    def test_json_and_other_formats_rejected(self):
+        for name in ('a.json', 'a.txt', 'a.JSON'):
+            r = preview_batch({'files': [f('[{"speaker":"A","text":"好"}]', name)]})
+            self.assertEqual(r['counts'], {'ready': 0, 'error': 1})
+            self.assertIn('仅支持XML', r['groups'][0]['error'])
+
+    def test_xml_stable_voices(self):
+        r = preview_batch({'files': [f(xml('USER')), f(xml('AGENT')), f(xml('AGENT', 'other')), f(xml('USER', 'other'))]})
         maps = [{line['speaker']: line['voice'] for line in g['preview']['script']['lines']} for g in r['groups']]
         self.assertEqual(maps[0], maps[1])
-
-    def test_json_error_isolated(self):
-        r = preview_batch({'files': [f('bad', 'a.json'), f('[{"speaker":"A","text":"好"}]', 'b.json')]})
-        self.assertEqual(r['counts'], {'ready': 1, 'error': 1})
 
     def test_duration_conflict(self):
         files = [f(xml('AGENT')), f(xml('USER').replace('<duration>4</duration>', '<duration>5</duration>'))]
         self.assertEqual(preview_batch({'files': files})['counts']['error'], 1)
 
     def test_explicit_voice_persists_across_batch(self):
-        files = [f('[{"speaker":"B","text":"好"}]', 'b.json'),
-                 f('[{"speaker":"B","text":"是"}]', 'a.json')]
-        r = preview_batch({'files': files, 'voices': {'B': 'zh-CN-YunxiNeural'}})
-        self.assertTrue(all(g['preview']['script']['lines'][0]['voice'] == 'zh-CN-YunxiNeural' for g in r['groups']))
+        files = [f(xml('AGENT')), f(xml('USER')), f(xml('AGENT', 'other')), f(xml('USER', 'other'))]
+        r = preview_batch({'files': files, 'voices': {'USER': 'zh-CN-YunxiNeural'}})
+        self.assertEqual(r['counts']['ready'], 2)
+        self.assertTrue(all(line['voice'] == 'zh-CN-YunxiNeural' for g in r['groups'] for line in g['preview']['script']['lines'] if line['speaker'] == 'USER'))
 
     def test_limits(self):
         for files in ([], [f('{}', 'a.json')] * 41, [f('a' * (2 * 1024 * 1024 + 1))], [f('a' * (2 * 1024 * 1024))] * 4):
