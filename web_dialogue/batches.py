@@ -31,8 +31,9 @@ class DownloadLease:
 
 
 class Batches:
-    def __init__(self, jobs):
+    def __init__(self, jobs, catalog=None):
         self.jobs = jobs
+        self.catalog = catalog
         self.root = jobs.root / 'batches'
         self.root.mkdir(mode=0o700)
         self.items = {}
@@ -58,7 +59,7 @@ class Batches:
                     raise InputError('同一请求标识的内容发生变化，请重新生成请求。')
                 return self.snapshot(ident)
             self._available()
-            preview = preview_batch(payload)
+            preview = preview_batch(payload, self.catalog)
             excluded = payload.get('excluded', [])
             if not isinstance(excluded, list) or any(not isinstance(x, str) for x in excluded):
                 raise InputError('排除列表无效。')

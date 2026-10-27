@@ -1,0 +1,14 @@
+import unittest
+from .honorific import direct_address
+
+class HonorificTests(unittest.TestCase):
+    def row(self, text, speaker='AGENT', muted=False):
+        return {'speaker': speaker, 'text': text, 'muted': muted}
+    def test_direct_address(self):
+        self.assertEqual(direct_address([self.row('您好，女士，请问需要什么？')]), 'female')
+        self.assertEqual(direct_address([self.row('先生，您好。')]), 'male')
+    def test_ambiguous_does_not_switch(self):
+        for text in ('那位先生来了。', '他说“先生，您好”。', '女士，您好。先生，您好。', '这位女士，您好。', '女士，您好。那位先生来了。', '女士，您好。他说“先生，您好”。', '女士，您好。请转告李先生。', "他说'您好，先生，请坐。'", '我刚才对客户说：您好，先生，请坐。', '他说“您好，先生，请坐。'):
+            with self.subTest(text=text): self.assertEqual(direct_address([self.row(text)]), 'undetermined')
+    def test_user_and_muted_are_ignored(self):
+        self.assertEqual(direct_address([self.row('先生，您好。', 'USER'), self.row('女士，您好。', muted=True)]), 'undetermined')

@@ -59,6 +59,17 @@ class FolderTests(unittest.TestCase):
         self.assertEqual(restored['rate'],1.5);self.assertTrue(restored['input_folder']['valid'])
         self.assertNotEqual(restored['input_folder']['folder_id'], selected['folder_id'])
         self.assertFalse(self.host.set_preferences({'paths':{'output':'C:/escape'}})['ok'])
+    def test_legacy_nondefault_user_voice_becomes_manual(self):
+        (self.root/'prefs.json').write_text(json.dumps({'version':1,'voices':{'USER':'zh-CN-YunxiNeural'},'rate':1.2,'pause_ms':400,'paths':{},'receipts':{},'exports':{}}))
+        restored=Host(self.root).get_preferences()
+        self.assertEqual(restored['voices']['USER'],'zh-CN-YunxiNeural')
+        self.assertTrue(restored['manual_user_voice']);self.assertFalse(restored['auto_voice'])
+    def test_foreign_voice_id_storage_is_structural_not_membership(self):
+        voices={'AGENT':'en-US-JennyNeural','USER':'zh-CN-XiaoyiNeural'}
+        self.assertTrue(self.host.set_preferences({'voices':voices})['ok'])
+        self.assertEqual(Host(self.root).get_preferences()['voices'],voices)
+        self.assertFalse(self.host.set_preferences({'voices':{'USER':'https://evil/voice'}})['ok'])
+        self.assertEqual(Host(self.root).get_preferences()['voices'],voices)
     def test_new_and_legacy_voices_persist(self):
         self.assertTrue(self.host.set_preferences({'voices': {'AGENT': 'zh-CN-YunxiaNeural', 'USER': 'zh-CN-YunyangNeural'}})['ok'])
         self.assertEqual(Host(self.root).get_preferences()['voices'], {'AGENT': 'zh-CN-YunxiaNeural', 'USER': 'zh-CN-YunyangNeural'})

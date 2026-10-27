@@ -47,7 +47,7 @@ class NativeFolderMixin:
         self._folder_lock = threading.RLock()
         self._caps = {}
         self._selected = {'input': None, 'output': None}
-        self._prefs = {'voices': {}, 'rate': 1, 'pause_ms': 250, 'theme': 'light', 'paths': {}, 'receipts': {}, 'exports': {}}
+        self._prefs = {'voices': {}, 'rate': 1, 'pause_ms': 250, 'theme': 'light', 'auto_voice': True, 'manual_user_voice': False, 'paths': {}, 'receipts': {}, 'exports': {}}
         self._prefs_path = Path(storage) if storage else Path(os.environ.get('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))) / 'DialogueTTS' / 'preferences.json'
         try:
             loaded = json.loads(_read_regular(self._prefs_path, 4 * 1024 * 1024))
@@ -55,9 +55,11 @@ class NativeFolderMixin:
             if loaded.get('version') == 1:
                 for key in self._prefs:
                     if isinstance(loaded.get(key), (int,float) if key == 'rate' else type(self._prefs[key])): self._prefs[key] = loaded[key]
+                if 'manual_user_voice' not in loaded and self._prefs['voices'].get('USER') not in (None, 'zh-CN-XiaoyiNeural'):
+                    self._prefs['manual_user_voice'] = True; self._prefs['auto_voice'] = False
                 self._validate_settings(self._prefs)
         except (OSError, ValueError, TypeError):
-            self._prefs = {'voices': {}, 'rate': 1, 'pause_ms': 250, 'theme': 'light', 'paths': {}, 'receipts': {}, 'exports': {}}
+            self._prefs = {'voices': {}, 'rate': 1, 'pause_ms': 250, 'theme': 'light', 'auto_voice': True, 'manual_user_voice': False, 'paths': {}, 'receipts': {}, 'exports': {}}
         for kind in ('input', 'output'):
             path = self._prefs['paths'].get(kind)
             if isinstance(path, str):
@@ -66,8 +68,9 @@ class NativeFolderMixin:
 
     def _validate_settings(self, values):
         voices = values.get('voices', {})
-        if not isinstance(voices, dict) or any(k not in {'AGENT','USER'} or v not in VOICES for k,v in voices.items()): raise ValueError('音色无效')
+        if not isinstance(voices, dict) or any(k not in {'AGENT','USER'} or not isinstance(v,str) or not re.fullmatch(r'[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,16}){1,4}-[A-Za-z0-9]{1,50}Neural',v) for k,v in voices.items()): raise ValueError('音色无效')
         if values.get('theme', 'light') not in ('light', 'dark'): raise ValueError('主题无效')
+        if not isinstance(values.get('auto_voice', True), bool) or not isinstance(values.get('manual_user_voice', False), bool): raise ValueError('音色匹配设置无效')
         rate = values.get('rate', 1); pause = values.get('pause_ms', 250)
         if isinstance(rate, bool) or not isinstance(rate, (int,float)) or not math.isfinite(rate) or not .5 <= rate <= 2: raise ValueError('语速无效')
         if isinstance(pause, bool) or not isinstance(pause, int) or not 0 <= pause <= 3000: raise ValueError('停顿无效')
@@ -115,11 +118,11 @@ class NativeFolderMixin:
                     try: self._cap(item['folder_id'], kind)
                     except (OSError, ValueError): item['valid'] = False
             return {'ok': True, 'input_folder': self._selected['input'], 'output_folder': self._selected['output'],
-                    **{k: self._prefs[k] for k in ('voices','rate','pause_ms','theme')}}
+                    **{k: self._prefs[k] for k in ('voices','rate','pause_ms','theme','auto_voice','manual_user_voice')}}
 
     def set_preferences(self, values):
         try:
-            if not isinstance(values, dict) or set(values) - {'voices','rate','pause_ms','theme'}: raise ValueError('设置无效')
+            if not isinstance(values, dict) or set(values) - {'voices','rate','pause_ms','theme','auto_voice','manual_user_voice'}: raise ValueError('设置无效')
             with self._folder_lock:
                 merged = {**self._prefs, **values}; self._validate_settings(merged)
                 previous = self._prefs; self._prefs = merged

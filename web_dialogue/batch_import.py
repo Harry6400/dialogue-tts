@@ -28,7 +28,7 @@ def _metadata(content):
             (root.findtext('./callInfo/duration') or '').strip(), role)
 
 
-def preview_batch(payload):
+def preview_batch(payload, catalog=None):
     if not isinstance(payload, dict):
         raise InputError('批次参数必须是对象。')
     files = payload.get('files')
@@ -44,10 +44,12 @@ def preview_batch(payload):
         total += size
     if total > MAX_BATCH_BYTES:
         raise InputError('每批文件总计最多20MiB。')
-    options = {key: payload[key] for key in ('rate', 'pause_ms', 'xml_time_unit', 'voices') if key in payload}
+    options = {key: payload[key] for key in ('rate', 'pause_ms', 'xml_time_unit', 'voices', 'auto_voice', 'manual_user_voice') if key in payload}
     configured = options.get('voices', {})
     if not isinstance(configured, dict):
         raise InputError('角色音色映射必须是对象。')
+    overrides = payload.get('voice_overrides', {})
+    if not isinstance(overrides, dict) or len(overrides) > MAX_FILES or any(not isinstance(k,str) or not isinstance(v,str) for k,v in overrides.items()): raise InputError('逐通音色设置无效。')
     pairs = payload.get('pairs', [])
     if not isinstance(pairs, list) or pairs:
         raise InputError('手工配对已停用；仅按 callInfo/callReference 自动配对。')
@@ -82,18 +84,12 @@ def preview_batch(payload):
                 raise InputError('此通话缺少 ' + missing + ' 声道。')
             candidate = {**options, 'format': 'xml_pair', 'xml_files': [
                 {'name': f'声道{j + 1}.xml', 'content': files[i]['content']} for j, i in enumerate(indices)]}
-            group['preview'] = normalize(candidate)
+            if group['id'] in overrides:
+                candidate['voices'] = {**configured, 'USER': overrides[group['id']]}
+                candidate['manual_user_voice'] = True
+            group['preview'] = normalize(candidate, catalog)
             group['fingerprint'] = group['preview']['fingerprint']
             group['status'] = 'ready'
         except (InputError, RecursionError) as exc:
             group['error'] = str(exc) if isinstance(exc, InputError) else '文件嵌套层级过深。'
-    # Assign one mapping for the whole batch, independent of per-file line order.
-    speakers = sorted({s for g in groups if g['status'] == 'ready' for s in g['preview']['speakers']})
-    mapping = {s: VOICES[i % 2]['id'] for i, s in enumerate(speakers)}
-    mapping.update({'AGENT': VOICES[0]['id'], 'A': VOICES[0]['id'], 'USER': VOICES[1]['id'], 'B': VOICES[1]['id']})
-    mapping.update(configured)
-    for group in groups:
-        if group['status'] == 'ready':
-            for line in group['preview']['script']['lines']:
-                line['voice'] = mapping[line['speaker']]
     return {'groups': groups, 'counts': {state: sum(g['status'] == state for g in groups) for state in ('ready', 'error')}}

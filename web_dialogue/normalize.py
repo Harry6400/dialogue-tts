@@ -30,7 +30,7 @@ def resolve(data, path, label):
     return value
 
 
-def normalize(payload):
+def normalize(payload, catalog=None):
     if isinstance(payload, dict) and payload.get("format") == "xml_pair":
         from .xml_pair import XMLImportError, parse_xml_pair
         try:
@@ -42,9 +42,30 @@ def normalize(payload):
         if not isinstance(configured, dict):
             raise InputError("角色音色映射必须是对象。")
         mapping = {"AGENT": VOICES[0]["id"], "USER": VOICES[1]["id"], **configured}
+        from .honorific import direct_address
+        auto = payload.get('auto_voice', False)
+        manual = payload.get('manual_user_voice', False)
+        if not isinstance(auto, bool) or not isinstance(manual, bool):
+            raise InputError('音色匹配设置无效。')
+        address = direct_address(imported['rows']) if auto else 'undetermined'
+        voices_catalog = catalog if catalog is not None else VOICES
+        current = mapping['USER']
+        if not isinstance(current, str): raise InputError('USER 音色无效，请重新选择。')
+        genders = {v['id']:v.get('gender') for v in voices_catalog}
+        for i,v in enumerate(VOICES):
+            if v['id'] in genders and not genders[v['id']]: genders[v['id']] = 'Female' if i < 2 else 'Male'
+        if current not in genders: raise InputError('已选 USER 音色不在当前目录，请重新选择。')
+        reason = '手动选择' if manual else ('自动匹配关闭' if not auto else '称呼未判定')
+        if auto and not manual and address in ('female','male'):
+            wanted = 'Female' if address == 'female' else 'Male'
+            if genders.get(current) != wanted:
+                proposed = 'zh-CN-XiaoyiNeural' if address == 'female' else 'zh-CN-YunxiNeural'
+                if proposed in genders: mapping['USER'] = proposed
+                else: raise InputError('自动匹配所需的默认音色不可用，请手动选择。')
+            reason = '称呼：女士' if address == 'female' else '称呼：先生'
         adapted = {"data": safe_rows, "rate": payload.get("rate", 1),
                    "pause_ms": payload.get("pause_ms", 250), "voices": mapping}
-        result = normalize(adapted)
+        result = normalize(adapted, catalog)
         for line, row in zip(result["script"]["lines"], safe_rows):
             line["id"] = row["id"]
         result["rows"] = imported["rows"]
@@ -53,6 +74,7 @@ def normalize(payload):
         result["muted_count"] = imported["muted_count"]
         from .fingerprints import dialogue_fingerprint
         result["fingerprint"] = dialogue_fingerprint(imported["_call_reference"], result["script"])
+        result["voice_choice"] = {"user": mapping["USER"], "reason": reason, "address": address}
         result["format"] = "xml_pair"
         return result
     if not isinstance(payload, dict) or "data" not in payload:
@@ -75,7 +97,7 @@ def normalize(payload):
     mapping = payload.get("voices", {})
     if not isinstance(mapping, dict):
         raise InputError("角色音色映射必须是对象。")
-    allowed = {v["id"] for v in VOICES}
+    allowed = {v["id"] for v in (catalog if catalog is not None else VOICES)}
     speakers, clean, total = [], [], 0
     for i, row in enumerate(rows, 1):
         if not isinstance(row, dict):

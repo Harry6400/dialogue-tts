@@ -230,7 +230,8 @@ final class FolderState {
         return result
     }
     func preferences() -> [String: Any] {
-        var result: [String: Any] = ["ok": true, "voices": values["voices"] ?? [:], "rate": values["rate"] ?? 1.0, "pause_ms": values["pause_ms"] ?? 250, "theme": values["theme"] ?? "light"]
+        var result: [String: Any] = ["ok": true, "voices": values["voices"] ?? [:], "rate": values["rate"] ?? 1.0, "pause_ms": values["pause_ms"] ?? 250, "theme": values["theme"] ?? "light", "auto_voice": values["auto_voice"] ?? true, "manual_user_voice": values["manual_user_voice"] ?? false]
+        if values["manual_user_voice"] == nil, let voices = values["voices"] as? [String: String], let user = voices["USER"], user != "zh-CN-XiaoyiNeural" { result["manual_user_voice"] = true; result["auto_voice"] = false }
         for role in ["input", "output"] {
             if let id = roles[role], let url = urls[id] {
                 var isDirectory: ObjCBool = false
@@ -242,12 +243,17 @@ final class FolderState {
     }
     func setPreferences(_ args: [String: Any]) throws -> Bool {
         guard let voices = args["voices"] as? [String: String], voices.count <= 2,
-              Set(voices.keys).isSubset(of: ["AGENT", "USER"]), voices.values.allSatisfy({ allowedVoices.contains($0) }),
+              Set(voices.keys).isSubset(of: ["AGENT", "USER"]), voices.values.allSatisfy({ $0.range(of: "^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,16}){1,4}-[A-Za-z0-9]{1,50}Neural$", options: .regularExpression) != nil }),
               let rate = args["rate"] as? Double, rate.isFinite, (0.5...2.0).contains(rate),
               let pause = args["pause_ms"] as? Int, (0...3000).contains(pause) else { return false }
         let theme = args["theme"] as? String ?? (values["theme"] as? String ?? "light")
         guard ["light", "dark"].contains(theme) else { return false }
+        if let value = args["auto_voice"], !(value is Bool) { return false }
+        if let value = args["manual_user_voice"], !(value is Bool) { return false }
+        let auto = args["auto_voice"] as? Bool ?? values["auto_voice"] as? Bool ?? true
+        let manual = args["manual_user_voice"] as? Bool ?? values["manual_user_voice"] as? Bool ?? false
         let before = values
+        values["auto_voice"] = auto; values["manual_user_voice"] = manual
         values["theme"] = theme
         values["voices"] = voices; values["rate"] = rate; values["pause_ms"] = pause
         do { try persist(); return true } catch { values = before; throw error }

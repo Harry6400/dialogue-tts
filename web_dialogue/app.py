@@ -20,18 +20,18 @@ import uuid
 from .normalize import VOICES, InputError, normalize
 from .xml_example import XML_EXAMPLE
 
-def normalize_source(payload):
+def normalize_source(payload, catalog=None):
     if not isinstance(payload, dict) or payload.get("format") != "xml_pair" or "data" in payload:
         raise InputError("仅支持双声道 XML 输入。")
-    return normalize(payload)
+    return normalize(payload, catalog)
 
-def audition_script(payload):
+def audition_script(payload, catalog=None):
     if payload.get("consent") is not True:
         raise InputError("请先允许发送试听文本至微软语音服务。")
     sample = {"format": "xml_pair", "xml_files": XML_EXAMPLE,
               "voices": payload.get("voices", {}), "rate": payload.get("rate", 1),
               "pause_ms": payload.get("pause_ms", 250)}
-    script = normalize_source(sample)["script"]
+    script = normalize_source(sample, catalog)["script"]
     script["lines"] = script["lines"][:2]
     return script
 
@@ -242,7 +242,9 @@ class Handler(BaseHTTPRequestHandler):
             from .updates import check_update
             return self.json(check_update())
         if path == "/api/config":
-            return self.json({"token": self.server.token, "voices": VOICES, "xml_example": XML_EXAMPLE, "can_shutdown": getattr(self.server, "can_shutdown", False)})
+            return self.json({"token": self.server.token, "voices": self.server.voice_catalog["voices"], "catalog_revision": self.server.voice_catalog["revision"], "catalog_source": self.server.voice_catalog["source"], "xml_example": XML_EXAMPLE, "can_shutdown": getattr(self.server, "can_shutdown", False)})
+        if path == "/api/voices":
+            return self.json(self.server.voice_catalog)
         parts = path.strip("/").split("/")
         if len(parts) in (3, 4, 5) and parts[:2] == ["api", "batches"]:
             try:
@@ -353,9 +355,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not isinstance(payload, dict):
                 raise InputError('请求必须为对象。')
+            supplied_revision = payload.get('catalog_revision')
+            if supplied_revision is not None and supplied_revision != self.server.voice_catalog['revision']:
+                raise InputError('音色目录已改变，请重新载入后选择。')
             if path == '/api/batches/preview':
                 from .batch_import import preview_batch
-                return self.json(preview_batch(payload))
+                return self.json(preview_batch(payload, self.server.voice_catalog["voices"]))
             if path == '/api/batches':
                 return self.json(self.server.batches.start(payload), 202)
             batch_parts = path.strip('/').split('/')
@@ -367,14 +372,14 @@ class Handler(BaseHTTPRequestHandler):
                         raise InputError('请确认将脱敏文本发送至微软语音服务。')
                     return self.json(self.server.batches.retry(batch_parts[2]))
             if path == "/api/preview":
-                return self.json(normalize_source(payload))
+                return self.json(normalize_source(payload, self.server.voice_catalog["voices"]))
             if path == "/api/audition":
-                script = audition_script(payload)
+                script = audition_script(payload, self.server.voice_catalog["voices"])
                 return self.json(self.server.jobs.start(script, payload.get("request_id"), audition=True), 202)
             if path == "/api/jobs":
                 if not isinstance(payload, dict) or payload.get("consent") is not True:
                     raise InputError("请先确认：生成时会将脱敏后的文本发送至微软语音服务。")
-                normalized = normalize_source(payload)
+                normalized = normalize_source(payload, self.server.voice_catalog["voices"])
                 return self.json(self.server.jobs.start(normalized["script"], payload.get("request_id"), fingerprint=normalized["fingerprint"]), 202)
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "cancel":
@@ -415,9 +420,11 @@ def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None
     server.token = secrets.token_urlsafe(32)
     server.update_lock = threading.RLock()
     server.update_in_progress = False
+    from .voice_catalog import load_catalog
+    server.voice_catalog = load_catalog()
     server.jobs = Jobs()
     from .batches import Batches
-    server.batches = Batches(server.jobs)
+    server.batches = Batches(server.jobs, server.voice_catalog["voices"])
     server.jobs.batches = server.batches
     return server
 
