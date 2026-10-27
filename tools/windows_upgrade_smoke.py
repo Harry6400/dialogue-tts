@@ -86,6 +86,33 @@ def capture_owned_prompts(root, report_path, authorization=None):
             expected=authorization['target'].resolve()
             displayed={os.path.normcase(os.path.normpath(c['text'])) for c in controls}
             target_matches=bool(displayed & {os.path.normcase(str(expected)),os.path.normcase(str(authorization['target']))})
+            binding='full-control-text' if target_matches else None
+            if not target_matches:
+                # Read-only accessibility metadata may retain the untruncated filename.
+                try:
+                    script=root/'read-owned-accessibility.ps1'
+                    script.write_text("param([long]$WindowHandle)\nAdd-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes; $e=[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle); $e.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition) | ForEach-Object { @{name=$_.Current.Name;help=$_.Current.HelpText} } | ConvertTo-Json -Compress")
+                    accessible=subprocess.run(['powershell','-NoProfile','-NonInteractive','-File',str(script),str(hwnd)],capture_output=True,text=True,timeout=10,check=True)
+                    values=json.loads(accessible.stdout or '[]');values=values if isinstance(values,list) else [values]
+                    entry['accessibility']=values[:20]
+                    texts={os.path.normcase(os.path.normpath(str(v))) for item in values for v in item.values() if isinstance(v,str)}
+                    target_matches=bool(texts & {os.path.normcase(str(expected)),os.path.normcase(str(authorization['target']))})
+                    if target_matches:binding='full-accessibility-path'
+                except Exception as exc:entry['accessibility_error']=type(exc).__name__
+            if not target_matches:
+                # The OS really shortens SysLink text. Bind it to the same trusted
+                # helper's exact private plan, immutable candidate hash and unique
+                # disposable directory suffix; never accept a basename alone.
+                plan_file=authorization['plan']
+                if plan_file.is_file() and not plan_file.is_symlink() and plan_file.stat().st_size<=16384:
+                    plan=json.loads(plan_file.read_text())
+                    payload=Path(plan['payload']).resolve()
+                    unique_tail=os.path.normcase(root.name[-8:]+'\\installation\\DialogueTTS.exe')
+                    suffix_matches=any(c['class']=='SysLink' and c['text'].startswith('...') and unique_tail in os.path.normcase(c['text']) and os.path.normcase(str(authorization['target'])).endswith(os.path.normcase(c['text'][3:])) for c in controls)
+                    plan_matches=Path(plan['target']).resolve()==expected and payload.is_relative_to((plan_file.parent/'extracted').resolve()) and sha256(payload)==authorization['sha256'] and sha256(authorization['helper'])==authorization['helper_sha256']
+                    target_matches=bool(suffix_matches and plan_matches)
+                    if target_matches:binding='exact-plan-helper-hashes-and-unique-OS-suffix'
+            entry['verified_target_binding']=binding
             owner_matches=processes.get(pid.value)==authorization['helper'].resolve()
             if title.value=='Open File - Security Warning' and kind.value=='#32770' and target_matches and owner_matches and len(run_buttons)==1 and sha256(expected)==authorization['sha256']:
                 # One explicit owner-approved confirmation of this exact self-built CI binary.
@@ -191,7 +218,7 @@ def main(exe, report_path):
             child=subprocess.Popen([str(helper),'--apply-update',str(path)],env=env)
             from datetime import datetime,timezone
             approved=(os.environ.get('DIALOGUE_CI_CONFIRM_ONCE')=='owner-approved-2026-10-27' and os.environ.get('GITHUB_EVENT_NAME')=='workflow_dispatch' and os.environ.get('GITHUB_RUN_ATTEMPT')=='1' and datetime.now(timezone.utc).date().isoformat()=='2026-10-27')
-            if approved:authorization={'target':target,'helper':helper,'sha256':sha256(candidate),'used':False,'posted':False}
+            if approved:authorization={'target':target,'helper':helper,'plan':path,'helper_sha256':sha256(exe),'sha256':sha256(candidate),'used':False,'posted':False}
             report['one_time_owner_confirmation_enabled']=approved
             wait_file(stage/'helper-ready.json');stop_old_window(old,old_gui_pid);old=None;old_gui_pid=None
             deadline=time.monotonic()+160; capture_at=time.monotonic()+15

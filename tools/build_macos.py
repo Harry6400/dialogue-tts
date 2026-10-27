@@ -31,7 +31,7 @@ def main():
     spec = work / 'dialogue-macos.spec'
     spec.write_text(f'''from PyInstaller.utils.hooks import collect_submodules
 a = Analysis([{str(ROOT / 'mac_launcher.py')!r}], pathex=[{str(ROOT)!r}], binaries=[], datas={datas!r},
-    hiddenimports=collect_submodules('edge_tts') + ['web_dialogue.worker', 'web_dialogue.mp3_frames', 'web_dialogue.xml_pair', 'web_dialogue.updates'],
+    hiddenimports=collect_submodules('edge_tts') + ['web_dialogue.worker', 'web_dialogue.mp3_frames', 'web_dialogue.xml_pair', 'web_dialogue.updates', 'web_dialogue.fingerprints', 'web_dialogue.safe_updater', 'web_dialogue.update_helper', 'web_dialogue.update_cancel', 'web_dialogue.updater_bridge', 'web_dialogue.updater_cli', 'web_dialogue.install_lock'],
     hookspath=[], hooksconfig={{}}, runtime_hooks=[], excludes=['tkinter', 'unittest', 'pytest', 'numpy', 'pydub', 'imageio_ffmpeg'],
     noarchive=False, optimize=1)
 pyz = PYZ(a.pure)
@@ -40,7 +40,7 @@ exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='DialogueTTSService', 
     disable_windowed_traceback=False, argv_emulation=False, target_arch='arm64', codesign_identity=None, entitlements_file=None)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='DialogueTTSService')
 app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.github.Harry6400.dialoguetts',
-    info_plist={{'CFBundleDisplayName':'对白', 'CFBundleShortVersionString':'0.2.0', 'CFBundleVersion':'2',
+    info_plist={{'CFBundleDisplayName':'对白', 'CFBundleShortVersionString':'0.3.0', 'CFBundleVersion':'3',
     'LSMinimumSystemVersion':'12.0', 'NSHighResolutionCapable':True, 'LSApplicationCategoryType':'public.app-category.utilities'}})
 ''', encoding='utf-8')
     env = dict(os.environ, PYINSTALLER_CONFIG_DIR=str(work / 'cache'))
@@ -79,15 +79,15 @@ app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.
         shutil.copyfile(ROOT / name, stage / name)
     (stage / '开始使用.txt').write_text(
         '对白 · Mac Apple Silicon 版（macOS 12 或更新）\n\n双击“对白.app”，会打开应用自己的窗口。\n'
-        '导入一个 JSON，或同时选择同一通对话的两个 XML，先解析预览，再选择声音并生成 MP3。\n'
+        '选择 XML 来源文件夹与结果文件夹，解析预览后选择声音并生成 MP3。\n'
         '生成语音需要联网；无需安装 Python、FFmpeg、模型或配置后端。原文件保持不变。\n'
         '关窗或点击“退出应用”会结束后台并清理临时音频，请先保存需要的结果。\n'
-        '“检查更新”查找本项目的正式版本；获取更新会打开官方 GitHub 发布页。\n\n'
+        '“检查更新”查找本项目正式版本；按应用提示确认后安装并重启。\n\n'
         '界面使用系统 WKWebView，服务仅在本机临时端口运行，不是外部后端。\n'
         '本包为本机构建，包含临时签名，未经过 Apple 开发者公证。\n'
         '源码与重建说明见同目录 DialogueTTS-Source.zip。\n', encoding='utf-8')
     roots = ['LICENSE', 'NOTICE', 'README.md', 'README_构建与许可.md', 'WINDOWS_开始使用.txt',
-             'mac_launcher.py', 'windows_launcher.py', 'requirements-windows-build.txt',
+             'mac_launcher.py', 'windows_launcher.py', 'native_windows_folders.py', 'native_windows_updater.py', 'requirements-windows-build.txt', 'test_safe_updater.py', 'docs',
              'web_dialogue', 'native_macos', 'examples', 'assets', 'third_party', 'tools', '.github/workflows']
     with zipfile.ZipFile(stage / 'DialogueTTS-Source.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for name in roots:
