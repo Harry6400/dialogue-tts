@@ -21,10 +21,10 @@ class CatalogTests(unittest.TestCase):
         cached=load_catalog(self.path,self.fail)
         self.assertEqual(cached['source'],'cache');self.assertEqual(cached['revision'],online['revision']);self.assertEqual(self.path.read_bytes(),previous)
     def test_invalid_network_or_old_cache_falls_back(self):
-        self.path.write_text('{"version":0,"voices":[]}')
+        self.path.write_text('{"version":0,"voices":[]}', encoding='utf-8')
         data=load_catalog(self.path,lambda:[{'ShortName':'https://evil','Locale':'en-US','Gender':'Female'}])
         self.assertEqual(data['source'],'fallback');self.assertEqual(len(data['voices']),6)
-        self.assertEqual(json.loads(self.path.read_text())['version'],0)
+        self.assertEqual(json.loads(self.path.read_text(encoding='utf-8'))['version'],0)
     def test_bad_duplicate_and_unknown_id_rejected(self):
         with self.assertRaises(ValueError): canonicalize(self.sample()+[{'ShortName':'en-US-JennyNeural','Locale':'en-US','Gender':'Male'}])
         catalog=load_catalog(self.path,self.sample)['voices']
@@ -33,5 +33,5 @@ class CatalogTests(unittest.TestCase):
         payload['voices']['USER']='en-US-NotInCatalogNeural'
         with self.assertRaises(InputError): normalize(payload,catalog)
     def test_cache_corruption_falls_back(self):
-        load_catalog(self.path,self.sample); record=json.loads(self.path.read_text());record['revision']='bad';self.path.write_text(json.dumps(record))
+        load_catalog(self.path,self.sample); record=json.loads(self.path.read_text(encoding='utf-8'));record['revision']='bad';self.path.write_text(json.dumps(record), encoding='utf-8')
         self.assertEqual(load_catalog(self.path,self.fail)['source'],'fallback')
