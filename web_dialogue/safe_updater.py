@@ -225,7 +225,11 @@ def replace_transaction(target, staged, launch_and_verify):
     incoming=work/target.name
     moved_old=False
     try:
-        if staged.is_dir(): shutil.copytree(staged,incoming,symlinks=True)
+        if staged.is_dir():
+            shutil.copytree(staged,incoming,symlinks=True)
+            # copytree/copy2 do not reliably preserve macOS quarantine. Mark
+            # and read back the actual incoming bundle before moving the old one.
+            if sys.platform == 'darwin': mark_macos_quarantine(incoming)
         else:
             with open(staged,'rb') as src,open(incoming,'xb') as dst:
                 shutil.copyfileobj(src,dst,1024*1024);dst.flush();os.fsync(dst.fileno())

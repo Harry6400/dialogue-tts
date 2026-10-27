@@ -84,6 +84,16 @@ class FoundationTests(unittest.TestCase):
         with patch('subprocess.run'), patch('subprocess.check_output', return_value=''):
             with self.assertRaises(UpdateError): mark_macos_quarantine(Path('/fiction/对白.app'))
 
+    def test_incoming_mac_bundle_is_marked_before_old_installation_moves(self):
+        from web_dialogue.safe_updater import replace_transaction
+        with tempfile.TemporaryDirectory() as raw:
+            root=Path(raw); old=root/'对白.app'; old.mkdir(); (old/'kept').write_bytes(b'old')
+            new=root/'new.app'; new.mkdir(); (new/'fresh').write_bytes(b'new')
+            with patch('web_dialogue.safe_updater.sys.platform', 'darwin'), patch('web_dialogue.safe_updater.mark_macos_quarantine', side_effect=UpdateError('cannot mark')):
+                with self.assertRaises(UpdateError): replace_transaction(old,new,lambda _:None)
+            self.assertEqual((old/'kept').read_bytes(),b'old')
+            self.assertFalse(list(root.glob('*.update-backup-*')))
+
     def test_tag_lookup_rejects_untrusted_paths_without_network(self):
         with patch('urllib.request.build_opener') as op:
             for tag in ('v1.2.3/../../latest', 'https://evil', '1.2.3', ''):

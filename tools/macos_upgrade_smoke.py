@@ -65,9 +65,10 @@ def main():
         if receipt.exists():
             ready = json.loads(receipt.read_text()); report['receipt_state'] = ready.get('state')
         report['preferences_and_records_preserved'] = all((profile / name).read_bytes() == data for name, data in sentinels.items())
+        report['installed_quarantine'] = subprocess.check_output(['/usr/bin/xattr', '-p', 'com.apple.quarantine', str(target)], text=True, timeout=10).strip()
         report['old_backup_retained'] = any(target.parent.glob(target.name + '.update-backup-*'))
         report['passed'] = (report['transaction'].get('state') == 'complete' and report.get('receipt_state') == 'ready'
-                            and report['helper_ready'] and report['waits_for_old_pid'] and report['preferences_and_records_preserved'] and report['old_backup_retained'])
+                            and report['helper_ready'] and report['waits_for_old_pid'] and report['preferences_and_records_preserved'] and report['old_backup_retained'] and bool(report['installed_quarantine']))
         report['private_evidence'] = str(updater.stage.relative_to(ROOT))
     except Exception as exc:
         report['error'] = type(exc).__name__ + ': ' + str(exc)
