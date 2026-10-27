@@ -37,10 +37,10 @@ def close_owned_window(pid):
         return True
     user.EnumWindows(callback(visit),0)
 
-def capture_owned_prompts(root, report_path, authorization=None, *, process_name="helper.exe", target_path=None):
+def capture_owned_prompts(root, report_path, binding_context=None, *, process_name="helper.exe", target_path=None):
     """Read-only evidence bound to the disposable helper or exact target exe."""
     if process_name not in {"helper.exe","DialogueTTS.exe"}:raise ValueError("Unsupported test process")
-    if process_name != "helper.exe":authorization=None
+    if process_name != "helper.exe":binding_context=None
     result=[]
     query="Get-CimInstance Win32_Process -Filter \"Name='"+process_name+"'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"
     raw=subprocess.run(['powershell','-NoProfile','-NonInteractive','-Command',query],capture_output=True,text=True,timeout=15)
@@ -56,7 +56,6 @@ def capture_owned_prompts(root, report_path, authorization=None, *, process_name
     user.GetClassNameW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p,ctypes.c_int]
     user.GetWindowRect.argtypes=[ctypes.c_void_p,ctypes.POINTER(Rect)]
     user.IsWindowVisible.argtypes=[ctypes.c_void_p]
-    user.PostMessageW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
     def visit(hwnd,_):
         pid=ctypes.c_ulong();user.GetWindowThreadProcessId(hwnd,ctypes.byref(pid))
         if pid.value not in pids or not user.IsWindowVisible(hwnd):return True
@@ -64,11 +63,10 @@ def capture_owned_prompts(root, report_path, authorization=None, *, process_name
         user.GetWindowTextW(hwnd,title,512);user.GetClassNameW(hwnd,kind,128)
         rect=Rect();user.GetWindowRect(hwnd,ctypes.byref(rect))
         entry={'pid':pid.value,'title':title.value,'class':kind.value}
-        controls=[]; run_buttons=[]
+        controls=[]
         def child_text(child,_):
             label=ctypes.create_unicode_buffer(1024);control_class=ctypes.create_unicode_buffer(128)
             user.GetWindowTextW(child,label,1024);user.GetClassNameW(child,control_class,128)
-            if control_class.value=='Button' and label.value.replace('&','').strip()=='Run':run_buttons.append(child)
             if label.value and len(controls)<20:controls.append({'class':control_class.value,'text':label.value})
             return True
         user.EnumChildWindows(ctypes.c_void_p(hwnd),callback(child_text),0)
@@ -84,11 +82,11 @@ def capture_owned_prompts(root, report_path, authorization=None, *, process_name
                 subprocess.run(['powershell','-NoProfile','-NonInteractive','-File',str(script),str(rect.left),str(rect.top),str(width),str(height),str(image)],capture_output=True,timeout=15,check=True)
                 entry['screenshot']=image.name
             except Exception as exc:entry['capture_error']=type(exc).__name__
-        if authorization and not authorization['used']:
+        if binding_context:
             from web_dialogue.safe_updater import sha256
-            expected=authorization['target'].resolve()
+            expected=binding_context['target'].resolve()
             displayed={os.path.normcase(os.path.normpath(c['text'])) for c in controls}
-            target_matches=bool(displayed & {os.path.normcase(str(expected)),os.path.normcase(str(authorization['target']))})
+            target_matches=bool(displayed & {os.path.normcase(str(expected)),os.path.normcase(str(binding_context['target']))})
             binding='full-control-text' if target_matches else None
             if not target_matches:
                 # Read-only accessibility metadata may retain the untruncated filename.
@@ -99,35 +97,43 @@ def capture_owned_prompts(root, report_path, authorization=None, *, process_name
                     values=json.loads(accessible.stdout or '[]');values=values if isinstance(values,list) else [values]
                     entry['accessibility']=values[:20]
                     texts={os.path.normcase(os.path.normpath(str(v))) for item in values for v in item.values() if isinstance(v,str)}
-                    target_matches=bool(texts & {os.path.normcase(str(expected)),os.path.normcase(str(authorization['target']))})
+                    target_matches=bool(texts & {os.path.normcase(str(expected)),os.path.normcase(str(binding_context['target']))})
                     if target_matches:binding='full-accessibility-path'
                 except Exception as exc:entry['accessibility_error']=type(exc).__name__
             if not target_matches:
                 # The OS really shortens SysLink text. Bind it to the same trusted
                 # helper's exact private plan, immutable candidate hash and unique
                 # disposable directory suffix; never accept a basename alone.
-                plan_file=authorization['plan']
+                plan_file=binding_context['plan']
                 if plan_file.is_file() and not plan_file.is_symlink() and plan_file.stat().st_size<=16384:
                     plan=json.loads(plan_file.read_text())
                     payload=Path(plan['payload']).resolve()
                     unique_tail=os.path.normcase(root.name[-8:]+'\\installation\\DialogueTTS.exe')
-                    suffix_matches=any(c['class']=='SysLink' and c['text'].startswith('...') and unique_tail in os.path.normcase(c['text']) and os.path.normcase(str(authorization['target'])).endswith(os.path.normcase(c['text'][3:])) for c in controls)
-                    plan_matches=Path(plan['target']).resolve()==expected and payload.is_relative_to((plan_file.parent/'extracted').resolve()) and sha256(payload)==authorization['sha256'] and sha256(authorization['helper'])==authorization['helper_sha256']
+                    suffix_matches=any(c['class']=='SysLink' and c['text'].startswith('...') and unique_tail in os.path.normcase(c['text']) and os.path.normcase(str(binding_context['target'])).endswith(os.path.normcase(c['text'][3:])) for c in controls)
+                    plan_matches=Path(plan['target']).resolve()==expected and payload.is_relative_to((plan_file.parent/'extracted').resolve()) and sha256(payload)==binding_context['sha256'] and sha256(binding_context['helper'])==binding_context['helper_sha256']
                     target_matches=bool(suffix_matches and plan_matches)
                     if target_matches:binding='exact-plan-helper-hashes-and-unique-OS-suffix'
             entry['verified_target_binding']=binding
-            owner_matches=processes.get(pid.value)==authorization['helper'].resolve()
-            if title.value=='Open File - Security Warning' and kind.value=='#32770' and target_matches and owner_matches and len(run_buttons)==1 and sha256(expected)==authorization['sha256']:
-                # One explicit owner-approved confirmation of this exact self-built CI binary.
-                # Do not select any checkbox, dismiss unrelated dialogs or alter MOTW/protections.
-                authorization['used']=True
-                entry['owner_approved_run_once']=bool(user.PostMessageW(run_buttons[0],0x00F5,0,0))
-                authorization['posted']=entry['owner_approved_run_once']
-            else:
-                entry['approval_match']={'exact_target_path':target_matches,'exact_helper_owner':owner_matches,'single_run_button':len(run_buttons)==1}
+            entry['exact_helper_owner']=processes.get(pid.value)==binding_context['helper'].resolve()
+            buttons={c['text'].replace('&','').strip() for c in controls if c['class']=='Button'}
+            entry['run_and_cancel_visible']={'Run','Cancel'} <= buttons
         result.append(entry);return True
     user.EnumWindows(callback(visit),0)
     return result
+
+
+def expected_security_gate(report,result,receipt,launch,*,correct_target,old_processes_exited,helper_exited):
+    """A narrow CI build gate, explicitly NOT a successful end-to-end update."""
+    required=('bad_hash_preserves_old','waits_for_old_pid','cancel_no_late_install',
+              'preferences_receipts_cache_preserved','old_backup_retained')
+    if not all(report.get('cases',{}).get(name) is True for name in required):return False
+    if not (correct_target and old_processes_exited and helper_exited):return False
+    if result.get('state')!='needs_attention' or receipt.get('state')!='waiting' or receipt.get('pid') is not None:return False
+    if launch.get('state')!='needs_attention' or launch.get('shell_returned') is not False:return False
+    return any(window.get('title')=='Open File - Security Warning' and window.get('class')=='#32770'
+               and window.get('verified_target_binding') in {'full-control-text','full-accessibility-path','exact-plan-helper-hashes-and-unique-OS-suffix'}
+               and window.get('exact_helper_owner') is True and window.get('run_and_cancel_visible') is True
+               for window in report.get('owned_prompt_windows',[]))
 
 
 def build_candidate(root, exe):
@@ -175,8 +181,8 @@ def build_candidate(root, exe):
 def main(exe, report_path):
     from web_dialogue.safe_updater import sha256, validate_payload
     from web_dialogue.updates import CURRENT_VERSION
-    report={'passed':False,'platform':sys.platform,'network_metadata':'not exercised; local candidate staged by test harness','folder_dialog_and_reveal':'mocked in separate folder smoke','cases':{}}
-    child=None;old=None;old_gui_pid=None;app_pid=None;root=None;stage=None;authorization=None
+    report={'passed':False,'end_to_end_passed':False,'ci_gate_passed':False,'outcome':'failed','platform':sys.platform,'network_metadata':'not exercised; local candidate staged by test harness','folder_dialog_and_reveal':'mocked in separate folder smoke','cases':{}}
+    child=None;old=None;old_gui_pid=None;app_pid=None;root=None;stage=None;binding_context=None
     try:
         # Keep failed CI sandboxes until runner teardown so evidence is not masked by EXE locks.
         from contextlib import nullcontext
@@ -233,33 +239,41 @@ def main(exe, report_path):
             old,old_gui_pid=start_old_window()
             stage,path,helper,plan=make_plan('successful-case',[old.pid,old_gui_pid])
             child=subprocess.Popen([str(helper),'--apply-update',str(path)],env=env)
-            from datetime import datetime,timezone
-            approved=(os.environ.get('DIALOGUE_CI_CONFIRM_ONCE')=='owner-approved-2026-10-27' and os.environ.get('GITHUB_EVENT_NAME')=='workflow_dispatch' and os.environ.get('GITHUB_RUN_ATTEMPT')=='1' and datetime.now(timezone.utc).date().isoformat()=='2026-10-27')
-            if approved:authorization={'target':target,'helper':helper,'plan':path,'helper_sha256':sha256(exe),'sha256':sha256(candidate),'used':False,'posted':False}
-            report['one_time_owner_confirmation_enabled']=approved
+            # Evidence binding only. This harness never activates Run or alters OS policy.
+            binding_context={'target':target,'helper':helper,'plan':path,'helper_sha256':sha256(exe),'sha256':sha256(candidate)}
             wait_file(stage/'helper-ready.json');stop_old_window(old,old_gui_pid);old=None;old_gui_pid=None
             deadline=time.monotonic()+160; capture_at=time.monotonic()+15
             while not (stage/'status.json').is_file() and time.monotonic()<deadline:
                 if time.monotonic()>=capture_at and not report.get('owned_prompt_windows'):
-                    try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path,authorization)
+                    try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path,binding_context)
                     except Exception as exc:report['prompt_capture_error']=str(exc)
                     capture_at=time.monotonic()+25
                 time.sleep(.2)
             result=wait_file(stage/'status.json',1)
             if result.get('state')!='complete' and not report.get('owned_prompt_windows'):
-                try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path,authorization)
+                try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path,binding_context)
                 except Exception as exc:report['prompt_capture_error']=str(exc)
             child.wait(timeout=20);child=None
             receipt=wait_file(stage/'receipt.json');app_pid=receipt.get('pid')
             report['transaction_state']=result['state'];report['receipt_state']=receipt.get('state')
-            report['one_time_owner_confirmation_posted']=bool(authorization and authorization['posted'])
             report['cases']['replacement_and_real_ready']=result['state']=='complete' and receipt.get('state')=='ready' and sha256(target)==sha256(candidate)
             if app_pid:close_owned_window(app_pid)
             validate_payload(target,test_version,'win32')
             report['test_candidate_version']=test_version
             report['cases']['preferences_receipts_cache_preserved']=all((state/k).read_bytes()==v for k,v in sentinels.items())
             report['cases']['old_backup_retained']=any(p.is_file() and sha256(p)==initial for p in install.glob('DialogueTTS.exe.update-backup-*'))
-            if not all(report['cases'].values()):raise RuntimeError('Isolated update not fully verified; check transaction state')
+            from web_dialogue.update_helper import alive
+            launch=wait_file(stage/'launch.json')
+            report['launch_state']=launch
+            complete=all(report['cases'].values())
+            security_gate=expected_security_gate(report,result,receipt,launch,
+                correct_target=sha256(target)==sha256(candidate),
+                old_processes_exited=not any(alive(pid) for pid in plan['old_pids']),helper_exited=True)
+            if not complete and not security_gate:raise RuntimeError('Isolated update failed or has an unknown readiness blocker')
+            if security_gate:
+                report.update(ci_gate_passed=True,outcome='requires_system_confirmation',
+                    security_confirmation_note='Unattended test stopped at the verified OS Run/Cancel dialog. No click was performed; end-to-end readiness was NOT verified in this run.')
+
             # Wait only for our owned app to close normally, never terminate unrelated processes.
             from web_dialogue.update_helper import alive
             if app_pid:
@@ -267,12 +281,12 @@ def main(exe, report_path):
                 while alive(app_pid) and time.monotonic()<deadline:time.sleep(.2)
                 if alive(app_pid):raise RuntimeError('Owned test app did not close normally')
                 app_pid=None
-            report['passed']=True
+            if complete:report.update(passed=True,end_to_end_passed=True,ci_gate_passed=True,outcome='verified')
     except Exception as exc:
         report['error']=str(exc)
         report['helper_returncode']=child.poll() if child else None
         if root and 'owned_prompt_windows' not in report:
-            try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path,authorization)
+            try:report['owned_prompt_windows']=capture_owned_prompts(root,report_path,binding_context)
             except Exception as capture_error:report['prompt_capture_error']=str(capture_error)
         if stage:
             report['transaction_evidence']={}
@@ -308,11 +322,11 @@ def main(exe, report_path):
             try:old.wait(timeout=25)
             except subprocess.TimeoutExpired:pass
         if app_pid:close_owned_window(app_pid)
-        if report['passed'] and root:
+        if report['ci_gate_passed'] and root:
             try:shutil.rmtree(root)
             except OSError:pass
         Path(report_path).write_text(json.dumps(report,indent=2,ensure_ascii=False),encoding='utf-8')
-    if not report['passed']:raise RuntimeError('Windows isolated upgrade smoke failed; see report')
+    if not report['ci_gate_passed']:raise RuntimeError('Windows isolated upgrade smoke failed; see report')
 
 if __name__=='__main__':
     sys.path.insert(0,str(ROOT))

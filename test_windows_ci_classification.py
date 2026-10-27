@@ -1,0 +1,28 @@
+"""CI outcome semantics: an OS confirmation gate is never end-to-end success."""
+import copy,unittest
+from pathlib import Path
+from tools.windows_upgrade_smoke import expected_security_gate
+
+class ClassificationTests(unittest.TestCase):
+    def fixture(self):
+        return ({'cases':{key:True for key in ('bad_hash_preserves_old','waits_for_old_pid','cancel_no_late_install','preferences_receipts_cache_preserved','old_backup_retained')},'owned_prompt_windows':[{'title':'Open File - Security Warning','class':'#32770','verified_target_binding':'exact-plan-helper-hashes-and-unique-OS-suffix','exact_helper_owner':True,'run_and_cancel_visible':True}]},{'state':'needs_attention'},{'state':'waiting'},{'state':'needs_attention','shell_returned':False})
+    def check(self,args,**kwargs):return expected_security_gate(*args,**{'correct_target':True,'old_processes_exited':True,'helper_exited':True,**kwargs})
+    def test_exact_expected_prompt(self):self.assertTrue(self.check(self.fixture()))
+    def test_shell_returned_but_not_ready_is_failure(self):
+        args=self.fixture();args[3]['shell_returned']=True;self.assertFalse(self.check(args))
+    def test_unbound_or_unknown_prompt_is_failure(self):
+        for key,value in [('verified_target_binding',None),('exact_helper_owner',False),('title','Unknown Error'),('run_and_cancel_visible',False)]:
+            args=self.fixture();args[0]['owned_prompt_windows'][0][key]=value;self.assertFalse(self.check(args))
+    def test_safety_case_or_target_failure(self):
+        args=self.fixture();args[0]['cases']['preferences_receipts_cache_preserved']=False;self.assertFalse(self.check(args))
+        self.assertFalse(self.check(self.fixture(),correct_target=False));self.assertFalse(self.check(self.fixture(),old_processes_exited=False));self.assertFalse(self.check(self.fixture(),helper_exited=False))
+    def test_no_confirmation_click_code_or_workflow_switch(self):
+        root=Path(__file__).parent
+        harness=(root/'tools/windows_upgrade_smoke.py').read_text()
+        workflow=(root/'.github/workflows/windows-build.yml').read_text()
+        for needle in ('0x00F5','DIALOGUE_CI_CONFIRM_ONCE','owner_approved_run_once','one_time_owner_confirmation','run_buttons'):
+            self.assertNotIn(needle,harness)
+        self.assertNotIn('confirm_isolated_candidate_once',workflow)
+        self.assertNotIn('DIALOGUE_CI_CONFIRM_ONCE',workflow)
+
+if __name__=='__main__':unittest.main()
