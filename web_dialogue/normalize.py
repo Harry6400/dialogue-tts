@@ -6,6 +6,8 @@ VOICES = [
     {"id": "zh-CN-XiaoyiNeural", "label": "晓伊 · 普通话女声 · 明快"},
     {"id": "zh-CN-YunxiNeural", "label": "云希 · 普通话男声"},
     {"id": "zh-CN-YunjianNeural", "label": "云健 · 普通话男声"},
+    {"id": "zh-CN-YunxiaNeural", "label": "云夏 · 普通话男声"},
+    {"id": "zh-CN-YunyangNeural", "label": "云扬 · 普通话男声"},
 ]
 
 class InputError(ValueError):

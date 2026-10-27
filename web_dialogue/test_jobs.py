@@ -55,6 +55,10 @@ class JobsTests(unittest.TestCase):
         self.assertNotIn('private input', str(sample))
         self.assertTrue(all(x['speech_rate'] == 1.25 for x in sample['lines']))
         with self.assertRaises(InputError): audition_script({'consent': False})
+    def test_audition_inherits_new_voices(self):
+        voices = {'AGENT': 'zh-CN-YunxiaNeural', 'USER': 'zh-CN-YunyangNeural'}
+        script = audition_script({'consent': True, 'voices': voices})
+        self.assertEqual({line['speaker']: line['voice'] for line in script['lines']}, voices)
     def test_auditions_do_not_evict_production_jobs(self):
         production = self.jobs.start(self.script, fingerprint='a'*64)
         self.jobs.cancel(production['id'])

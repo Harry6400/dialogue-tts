@@ -59,6 +59,11 @@ class FolderTests(unittest.TestCase):
         self.assertEqual(restored['rate'],1.5);self.assertTrue(restored['input_folder']['valid'])
         self.assertNotEqual(restored['input_folder']['folder_id'], selected['folder_id'])
         self.assertFalse(self.host.set_preferences({'paths':{'output':'C:/escape'}})['ok'])
+    def test_new_and_legacy_voices_persist(self):
+        self.assertTrue(self.host.set_preferences({'voices': {'AGENT': 'zh-CN-YunxiaNeural', 'USER': 'zh-CN-YunyangNeural'}})['ok'])
+        self.assertEqual(Host(self.root).get_preferences()['voices'], {'AGENT': 'zh-CN-YunxiaNeural', 'USER': 'zh-CN-YunyangNeural'})
+        self.assertTrue(self.host.set_preferences({'voices': {'AGENT': 'zh-CN-XiaoxiaoNeural', 'USER': 'zh-CN-XiaoyiNeural'}})['ok'])
+        self.assertEqual(Host(self.root).get_preferences()['voices']['USER'], 'zh-CN-XiaoyiNeural')
     def test_output_space_uses_capability_and_cleans_probe(self):
         result = self.host.check_output_space(self.out)
         self.assertTrue(result['ok'])

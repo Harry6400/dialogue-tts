@@ -45,7 +45,7 @@ final class FolderState {
     private let persistHook: (() throws -> Void)?
     private let beforeLinkHook: (() throws -> Void)?
     private let afterLinkHook: (() throws -> Void)?
-    private let allowedVoices = Set(["zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural", "zh-CN-YunxiNeural", "zh-CN-YunjianNeural"])
+    private let allowedVoices = Set(["zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural", "zh-CN-YunxiNeural", "zh-CN-YunjianNeural", "zh-CN-YunxiaNeural", "zh-CN-YunyangNeural"])
 
     init(storeOverride: URL? = nil, persistHook: (() throws -> Void)? = nil, beforeLinkHook: (() throws -> Void)? = nil, afterLinkHook: (() throws -> Void)? = nil) {
         self.persistHook = persistHook

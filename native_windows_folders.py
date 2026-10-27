@@ -13,7 +13,7 @@ import urllib.request
 import uuid
 
 MAX_AUDIO = 256 * 1024 * 1024
-VOICES = {'zh-CN-XiaoxiaoNeural','zh-CN-XiaoyiNeural','zh-CN-YunxiNeural','zh-CN-YunjianNeural'}
+VOICES = {'zh-CN-XiaoxiaoNeural','zh-CN-XiaoyiNeural','zh-CN-YunxiNeural','zh-CN-YunjianNeural','zh-CN-YunxiaNeural','zh-CN-YunyangNeural'}
 AUDIO_ROUTE = re.compile(r'/api/(?:jobs/[a-f0-9]{32}/audio|batches/[a-f0-9]{32}/audio/[0-9]{3})')
 FP = re.compile(r'[a-f0-9]{64}')
 
