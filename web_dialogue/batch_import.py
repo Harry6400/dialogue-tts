@@ -83,13 +83,27 @@ def preview_batch(payload, catalog=None):
                 missing = 'USER' if roles == ['AGENT'] else 'AGENT'
                 raise InputError('此通话缺少 ' + missing + ' 声道。')
             candidate = {**options, 'format': 'xml_pair', 'xml_files': [
-                {'name': f'声道{j + 1}.xml', 'content': files[i]['content']} for j, i in enumerate(indices)]}
+                {'name': f'声道{j+1}.xml', 'content': files[i]['content']} for j,i in enumerate(indices)]}
             if group['id'] in overrides:
                 candidate['voices'] = {**configured, 'USER': overrides[group['id']]}
                 candidate['manual_user_voice'] = True
             group['preview'] = normalize(candidate, catalog)
+            from .output_names import pair_filename
+            try:
+                group['filename'] = pair_filename([files[i] for i in indices])
+            except ValueError as exc:
+                group['error_code'] = 'invalid_filename'
+                raise InputError(str(exc)) from exc
+            group['preview']['filename'] = group['filename']
             group['fingerprint'] = group['preview']['fingerprint']
             group['status'] = 'ready'
         except (InputError, RecursionError) as exc:
             group['error'] = str(exc) if isinstance(exc, InputError) else '文件嵌套层级过深。'
+    names = {}
+    for group in groups:
+        if group['status'] == 'ready': names.setdefault(group['filename'], []).append(group)
+    for duplicates in names.values():
+        if len(duplicates) > 1:
+            for group in duplicates:
+                group.update(status='error', error_code='duplicate_filename', error='同批存在重复目标文件名；相关通话已跳过。')
     return {'groups': groups, 'counts': {state: sum(g['status'] == state for g in groups) for state in ('ready', 'error')}}

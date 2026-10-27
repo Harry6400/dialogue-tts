@@ -45,7 +45,13 @@ class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
         try:
             import webview
             is_zip = route.endswith('/zip')
-            name = 'dialogues.zip' if is_zip else ('dialogue-' + route.rsplit('/', 1)[1] + '.mp3' if '/batches/' in route else 'dialogue.mp3')
+            if not is_zip:
+                chosen = self._window.create_file_dialog(webview.FileDialog.FOLDER)
+                if not chosen: return {'ok':False,'cancelled':True}
+                capability = self._authorize(Path(chosen[0]), 'output')
+                try: return self.save_to_output(route,capability['folder_id'])
+                finally: self._caps.pop(capability['folder_id'],None)
+            name = 'dialogues.zip'
             chosen = self._window.create_file_dialog(webview.FileDialog.SAVE, save_filename=name,
                 file_types=('ZIP (*.zip)',) if is_zip else ('MP3 (*.mp3)',))
             if not chosen:
@@ -71,7 +77,9 @@ class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
                         output.write(block)
                     output.flush(); os.fsync(output.fileno())
                 if size != expected: raise ValueError('Incomplete download')
-            os.replace(temporary, target); temporary = None
+            if os.name == 'nt': os.rename(temporary,target)
+            else: os.link(temporary,target); Path(temporary).unlink()
+            temporary = None
             ident = uuid.uuid4().hex
             self._saved[ident] = target
             record = {'save_id': ident, 'name': target.name, 'path': str(target), 'resource_path': route}
@@ -151,11 +159,11 @@ def self_test(report_path, live=False):
                     from types import SimpleNamespace
                     from unittest.mock import patch
                     with tempfile.TemporaryDirectory() as folder:
-                        target = Path(folder) / 'saved.mp3'
+                        target = Path(folder) / status['filename']
                         callbacks = []
-                        bridge = NativeDownloads(base)
-                        bridge._window = SimpleNamespace(create_file_dialog=lambda *a, **k: (str(target),), evaluate_js=callbacks.append)
-                        with patch.dict(sys.modules, {'webview': SimpleNamespace(FileDialog=SimpleNamespace(SAVE=30))}):
+                        bridge = NativeDownloads(base,Path(folder)/'private-preferences.json')
+                        bridge._window = SimpleNamespace(create_file_dialog=lambda *a, **k: (folder,), evaluate_js=callbacks.append)
+                        with patch.dict(sys.modules, {'webview': SimpleNamespace(FileDialog=SimpleNamespace(FOLDER=20,SAVE=30))}):
                             saved = bridge.save_download(status['download_url'])
                         with patch('os.startfile', create=True) as reveal:
                             opened = bridge.reveal_saved(saved.get('save_id'))
@@ -165,7 +173,7 @@ def self_test(report_path, live=False):
                         folder_cap = bridge._authorize(Path(folder), 'output')['folder_id']
                         folder_saved = bridge.save_to_output(status['download_url'], folder_cap)
                         duplicate = bridge.save_to_output(status['download_url'], folder_cap)
-                        completed = bridge.check_completed(folder_cap, [preview['fingerprint']])
+                        completed = bridge.check_completed(folder_cap, [preview['fingerprint']], {preview['fingerprint']:preview['filename']})
                         report['native_folder_export'] = bool(folder_saved.get('ok') and duplicate.get('path') == folder_saved.get('path') and len(completed.get('completed', [])) == 1 and Path(folder_saved['path']).read_bytes() == audio)
                         if not report['native_folder_export']: raise RuntimeError('Native folder export verification failed')
 

@@ -16,6 +16,16 @@ describe('HTTP contract', () => {
 });
 
 describe('native contract', () => {
+  it('passes expected names and route-only manual saves to Windows', async () => {
+    const check = vi.fn().mockResolvedValue({ok: true, completed: [], conflicts: []});
+    const save = vi.fn().mockResolvedValue({cancelled: true});
+    const bridge = createNativeBridge({pywebview: {api: {check_completed: check, save_download: save}}});
+    const names = {['a'.repeat(64)]: '000123.mp3'};
+    await bridge.call('check_completed', {folder_id: 'authorized', fingerprints: Object.keys(names), expected_names: names});
+    expect(check).toHaveBeenCalledWith('authorized', Object.keys(names), names);
+    expect(await bridge.call('save_download', {resource_path: '/api/jobs/a/audio'})).toEqual({kind: 'cancelled'});
+    expect(save).toHaveBeenCalledWith('/api/jobs/a/audio'); bridge.dispose();
+  });
   it('does not simulate unsupported native success', async () => {
     const bridge = createNativeBridge({});
     expect(await bridge.call('choose_output_directory', {})).toEqual({kind: 'unsupported'});

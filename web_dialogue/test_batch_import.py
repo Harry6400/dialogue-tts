@@ -14,7 +14,15 @@ def xml(role, ref='fiction-call-1', start='2026-01-01T00:00:00', text='你好', 
             + ('<mutedSegments><muted start="0" end="1000"/></mutedSegments>' if mute else '') + '</analyze>')
 
 
-def f(content, name='input.xml'):
+def f(content, name=None):
+    if name is None:
+        import hashlib
+        import xml.etree.ElementTree as ET
+        try:
+            root=ET.fromstring(content);ref=root.findtext('./callInfo/callReference') or 'invalid'
+            prefix=str(int.from_bytes(hashlib.sha256(ref.encode()).digest()[:8]))
+            name=prefix+('0' if root.findtext('./callInfo/role')=='AGENT' else '1')+'.xml'
+        except ET.ParseError: name='invalid.xml'
     return {'name': name, 'content': content}
 
 
@@ -61,7 +69,8 @@ class BatchImportTests(unittest.TestCase):
 
     def test_muted_protection_and_no_filename_export(self):
         r = preview_batch({'files': [f(xml('AGENT', text='never-emit-this', mute=True), '../../phone-number.xml'), f(xml('USER'))]})
-        self.assertEqual(r['counts']['ready'], 1)
+        self.assertEqual(r['counts']['ready'], 0)
+        self.assertEqual(r['groups'][0]['error_code'], 'invalid_filename')
         self.assertNotIn('never-emit-this', json.dumps(r))
         self.assertNotIn('phone-number', json.dumps(r))
         self.assertEqual(r['groups'][0]['preview']['muted_count'], 1)
