@@ -4,6 +4,12 @@ import UniformTypeIdentifiers
 import Darwin
 import CryptoKit
 
+// terminateLater runs a nested AppKit loop. Starting it inside a main-queue
+// block prevents the later main-queue reply from running until that block exits.
+func scheduleNativeTermination(_ action: @escaping () -> Void) {
+    RunLoop.main.perform(inModes: [.default], block: action)
+}
+
 // Only inspect the selected directory itself. Refuse oversized batches rather than truncating.
 enum SelectedXMLFolderError: Error { case tooManyFiles, fileTooLarge, totalTooLarge, unreadable, unsupportedLinks, linkFailed, namesExhausted, nameConflict }
 
@@ -525,7 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             self?.notifyPage("dialogueNativeFolderResponse", payload: ["request_id": requestID, "result": result])
         }
         switch method {
-        case "request_close": reply(["ok": true]); DispatchQueue.main.async { NSApp.terminate(nil) }
+        case "request_close": reply(["ok": true]); scheduleNativeTermination { NSApp.terminate(nil) }
         case "get_preferences": reply(folderState.preferences())
         case "set_preferences":
             do { reply(try folderState.setPreferences(args) ? ["ok": true] : ["ok": false, "error": "设置无效"]) }
