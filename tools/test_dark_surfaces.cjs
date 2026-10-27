@@ -1,0 +1,14 @@
+const {JSDOM}=require('jsdom'),fs=require('fs'),assert=require('assert');
+const html=fs.readFileSync(require('path').join(__dirname,'../web_dialogue/index.html'),'utf8');
+const dom=new JSDOM(html);const d=dom.window.document;d.documentElement.dataset.theme='dark';
+const file=d.createElement('div');file.className='xmlfile';file.innerHTML='<span class="channel">A</span><span class="filetext">demo.xml</span>';d.getElementById('xmlfiles').append(file);
+const line=d.createElement('div');line.className='line';d.getElementById('preview').append(line);
+const style=e=>dom.window.getComputedStyle(e);
+assert.equal(style(d.querySelector('.importcard')).borderColor,'rgb(64, 84, 87)');
+assert.equal(style(d.querySelector('.stack')).backgroundColor,'rgb(34, 50, 55)');
+assert.equal(style(file).backgroundColor,'rgb(41, 60, 64)');
+assert.equal(style(file.querySelector('.channel')).backgroundColor,'rgb(49, 83, 75)');
+assert.equal(style(line).borderBottomColor,'rgb(64, 84, 87)');
+assert.equal(style(d.querySelector('.brandnote')).color,'rgb(177, 195, 197)');
+assert.equal(style(d.querySelector('.footer summary')).color,'rgb(177, 195, 197)');
+console.log('PASS: dark desktop surfaces, chips, separators and secondary text');dom.window.close();
