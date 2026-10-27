@@ -59,7 +59,7 @@ def main():
         initial_receipt.write_text(json.dumps({'nonce': initial_nonce, 'state': 'waiting'}))
         launch_normal(target, initial_receipt, initial_nonce, timeout=45)
         def owned_pid(name):
-            expression = re.escape(str(target / 'Contents/MacOS' / name)) + '$'
+            expression = re.escape(str(target / 'Contents/MacOS' / name)) + r'( |$)'
             pids = subprocess.check_output(['/usr/bin/pgrep', '-f', expression], text=True).split()
             if len(pids) != 1: raise RuntimeError('Cannot identify unique owned test process')
             return int(pids[0])
