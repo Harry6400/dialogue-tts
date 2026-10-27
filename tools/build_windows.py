@@ -9,26 +9,39 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 
+def pyinstaller_command(source, out, work, version_resource):
+    return [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
+                    '--name', 'DialogueTTS', '--version-file', str(version_resource), '--icon', str(source / 'assets' / 'dialogue.ico'), '--distpath', str(out), '--workpath', str(work),
+                    '--specpath', str(work.parent), '--hidden-import', 'web_dialogue.worker',
+                    '--hidden-import', 'web_dialogue.mp3_frames',
+                    '--hidden-import', 'web_dialogue.updater_cli', '--hidden-import', 'web_dialogue.updater_bridge',
+                    '--hidden-import', 'web_dialogue.safe_updater', '--hidden-import', 'web_dialogue.update_helper',
+                    '--hidden-import', 'web_dialogue.install_lock', '--hidden-import', 'web_dialogue.update_cancel', '--hidden-import', 'native_windows_updater', '--collect-all', 'webview', '--collect-all', 'pythonnet',
+                    '--hidden-import', 'clr_loader', '--exclude-module', 'PyQt5', '--exclude-module', 'PyQt6',
+                    '--exclude-module', 'PySide2', '--exclude-module', 'PySide6', '--exclude-module', 'cefpython3', '--collect-data', 'certifi',
+                    '--collect-submodules', 'edge_tts', '--add-data', f'{source / "web_dialogue" / "index.html"};web_dialogue',
+                    '--add-data', f'{source / "web_dialogue" / "silence.mp3"};web_dialogue',
+                    str(source / 'windows_launcher.py')]
+
 def main():
     if sys.platform != 'win32':
         raise SystemExit('Build the Windows binary on a Windows x64 runner.')
     out = ROOT / 'dist'
-    subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
-                    '--name', 'DialogueTTS', '--icon', str(ROOT / 'assets' / 'dialogue.ico'), '--distpath', str(out), '--workpath', str(ROOT / 'build' / 'windows'),
-                    '--specpath', str(ROOT / 'build'), '--hidden-import', 'web_dialogue.worker',
-                    '--hidden-import', 'web_dialogue.mp3_frames', '--collect-all', 'webview', '--collect-all', 'pythonnet',
-                    '--hidden-import', 'clr_loader', '--exclude-module', 'PyQt5', '--exclude-module', 'PyQt6',
-                    '--exclude-module', 'PySide2', '--exclude-module', 'PySide6', '--exclude-module', 'cefpython3', '--collect-data', 'certifi',
-                    '--collect-submodules', 'edge_tts', '--add-data', f'{ROOT / "web_dialogue" / "index.html"};web_dialogue',
-                    '--add-data', f'{ROOT / "web_dialogue" / "silence.mp3"};web_dialogue',
-                    str(ROOT / 'windows_launcher.py')], cwd=ROOT, check=True)
+    from windows_version_resource import write_resource
+    version_resource = ROOT / 'build' / 'windows-version.txt'
+    write_resource(version_resource)
+    subprocess.run(pyinstaller_command(ROOT, out, ROOT / 'build' / 'windows', version_resource), cwd=ROOT, check=True)
     exe = out / 'DialogueTTS.exe'
     if not exe.is_file() or exe.stat().st_size < 1000000:
         raise RuntimeError('The executable was not produced.')
-    # Desktop UI opening isn't possible here; a frozen localhost HTTP+worker test is.
+    from web_dialogue.safe_updater import validate_payload
+    from web_dialogue.updates import CURRENT_VERSION
+    validate_payload(exe, CURRENT_VERSION, 'win32')
+    # Frozen localhost HTTP+worker and native GUI smoke tests follow.
     subprocess.run([str(exe), '--self-test', str(out / 'windows-smoke.json'), '--live'], cwd=ROOT, check=True, timeout=240)
     # CI native-window verification is explicit; a failure is not an Android/Windows user-device pass.
     subprocess.run([str(exe), '--gui-test', str(out / 'windows-gui-smoke.json')], cwd=ROOT, check=True, timeout=80)
+    subprocess.run([sys.executable, str(ROOT / 'tools' / 'windows_upgrade_smoke.py'), str(exe), str(out / 'windows-upgrade-smoke.json')], cwd=ROOT, check=True, timeout=600)
     stage = out / 'DialogueTTS-Windows-x64'
     stage.mkdir(exist_ok=True)
     shutil.copy2(exe, stage / exe.name)

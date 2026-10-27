@@ -8,7 +8,7 @@ import time
 import uuid
 import zipfile
 from .normalize import InputError
-from .batch_import import preview_batch
+from .batch_import import preview_batch, MAX_CALLS
 
 
 class DownloadLease:
@@ -63,8 +63,8 @@ class Batches:
             if not isinstance(excluded, list) or any(not isinstance(x, str) for x in excluded):
                 raise InputError('排除列表无效。')
             groups = [g for g in preview['groups'] if g['id'] not in excluded]
-            if not groups or len(groups) > 20:
-                raise InputError('每批请选择 1–20 通对话。')
+            if not groups or len(groups) > MAX_CALLS:
+                raise InputError('每批请选择 1–50 通对话。')
             if any(g['status'] != 'ready' for g in groups):
                 raise InputError('请先处理或排除有错误的文件组。')
             self._reap_retired()
@@ -89,7 +89,7 @@ class Batches:
             self.items[ident] = {'id': ident, 'status': 'queued', 'cancel': False, 'generation': 0,
                 'items': [{'id': g['id'], 'name': g['name'], 'status': 'queued',
                     'completed': 0, 'total': len(g['preview']['script']['lines']),
-                    'script': g['preview']['script'], 'number': preview['groups'].index(g) + 1} for i,g in enumerate(groups)]}
+                    'fingerprint': g['fingerprint'], 'script': g['preview']['script'], 'number': preview['groups'].index(g) + 1} for i,g in enumerate(groups)]}
             self.requests[request] = (ident, digest)
             self._launch(ident)
             return self.snapshot(ident)
@@ -119,7 +119,7 @@ class Batches:
                         continue
                     row['status'] = 'running'
                 try:
-                    job = self.jobs.start(row['script'], batch_owner=ident)
+                    job = self.jobs.start(row['script'], batch_owner=ident, fingerprint=row['fingerprint'])
                     with self.lock:
                         row['job'] = job['id']
                     while True:
@@ -158,12 +158,19 @@ class Batches:
                 self.active = None
                 self.jobs.batch_active = None
 
+    def audio_fingerprint(self, ident, number):
+        with self.lock:
+            row = next((r for r in self.items[ident]['items'] if f"{r['number']:03d}" == number), None)
+            if row is None or row['status'] != 'done':
+                raise KeyError('Audio unavailable')
+            return row['fingerprint']
+
     def snapshot(self, ident):
         with self.lock:
             batch = self.items[ident]
             rows = []
             for r in batch['items']:
-                out = {k:r[k] for k in ('id','name','status','completed','total')}
+                out = {k:r[k] for k in ('id','name','status','completed','total','fingerprint')}
                 if r.get('error'): out['error'] = r['error']
                 if r['status'] == 'done':
                     out['download_url'] = f'/api/batches/{ident}/audio/{r["number"]:03d}'

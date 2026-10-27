@@ -1,0 +1,16 @@
+const {JSDOM}=require('jsdom'),fs=require('fs'),assert=require('assert');const {TextEncoder}=require('util');
+const wait=()=>new Promise(r=>setTimeout(r,10));let installs=0;
+const api={check_for_update:async()=>({state:'available',current_version:'0.3.0',latest_version:'0.3.1'}),install_update:async()=>{installs++;return{state:'cancelled'};}};
+const dom=new JSDOM(fs.readFileSync(require('path').join(__dirname,'../web_dialogue/index.html'),'utf8'),{runScripts:'dangerously',url:'http://127.0.0.1:1234/',beforeParse(w){w.TextEncoder=TextEncoder;w.pywebview={api};w.HTMLMediaElement.prototype.pause=()=>{};w.HTMLMediaElement.prototype.load=()=>{};w.fetch=async()=>({ok:true,json:async()=>({token:'x',voices:[]})});}});
+(async()=>{await wait();const w=dom.window,d=w.document;
+d.getElementById('checkupdate').click();await wait();assert.equal(d.getElementById('installupdate').hidden,false);
+w.eval("generatedResourcePaths.set('/api/jobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/audio','dialogue.mp3');clearResult()");assert.equal(w.dialogueUpdateSafety().unsaved,true,'hidden previous audio must still block');
+d.getElementById('installupdate').click();await wait();assert.equal(installs,0);assert.equal(d.querySelectorAll('#updatepending a[download]').length,1);
+w.dialogueNativeSaved({save_id:'real-save',path:'/chosen/dialogue.mp3',name:'dialogue.mp3',resource_path:'/api/jobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/audio'});assert.equal(w.dialogueUpdateSafety().unsaved,false);
+w.eval('nativeSavePending=true');d.getElementById('installupdate').click();await wait();assert.equal(installs,0);w.eval('nativeSavePending=false');
+d.getElementById('installupdate').click();await wait();assert.equal(installs,1);assert.equal(d.getElementById('checkupdate').disabled,false);
+w.eval("generatedResourcePaths.set('/api/batches/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/audio/001','dialogue-001.mp3')");assert.equal(w.dialogueUpdateSafety().unsaved,true);
+w.dialogueNativeSaved({save_id:'zip-save',path:'/chosen/dialogues.zip',name:'dialogues.zip',resource_path:'/api/batches/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/zip'});assert.equal(w.dialogueUpdateSafety().unsaved,false);
+let message;w.webkit={messageHandlers:{dialogueUpdater:{postMessage:v=>message=v}}};const pending=w.eval("updaterCall('check_for_update')");assert.equal(message.method,'check_for_update');assert.deepEqual(Object.keys(message.args),[]);w.dialogueNativeUpdateResponse({request_id:message.request_id,result:{state:'latest'}});assert.equal((await pending).state,'latest');
+w.eval("generatedResourcePaths.set('/api/jobs/cccccccccccccccccccccccccccccccc/audio','old.mp3');showPendingUpdateSaves()");w.confirm=()=>false;d.querySelector('#updatepending button').click();assert.equal(w.dialogueUpdateSafety().unsaved,true);w.confirm=()=>true;d.querySelector('#updatepending button').click();assert.equal(w.dialogueUpdateSafety().unsaved,false);
+console.log('PASS: updater native dispatch, unsaved ledger across hidden UI, actual save/ZIP receipt, active save block, cancel unlock, Mac callback');w.close();})().catch(e=>{console.error(e);dom.window.close();process.exitCode=1;});

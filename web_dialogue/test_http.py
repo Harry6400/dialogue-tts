@@ -1,4 +1,7 @@
 import json
+import io
+import tempfile
+from pathlib import Path
 import threading
 import unittest
 import urllib.error
@@ -30,6 +33,15 @@ class HTTPTests(unittest.TestCase):
         except urllib.error.HTTPError as e:
             r = e
         return r.status, r.read(), r.headers
+
+    def test_update_gate_blocks_new_work_and_unlocks(self):
+        try:
+            self.assertEqual(self.request('/api/update/lock', {})[0], 200)
+            self.assertEqual(self.request('/api/preview', XML_PAYLOAD)[0], 409)
+            self.assertEqual(self.request('/api/update/unlock', {}, {'X-App-Token':'wrong'})[0], 403)
+            self.assertEqual(self.request('/api/update/unlock', {})[0], 200)
+            self.assertEqual(self.request('/api/preview', XML_PAYLOAD)[0], 200)
+        finally: self.s.update_in_progress = False
 
     def test_page_and_config(self):
         status, body, h = self.request('/')
@@ -82,6 +94,23 @@ class HTTPTests(unittest.TestCase):
         config=json.loads(self.request('/api/config')[1])
         self.assertNotIn('example',config)
         self.assertEqual(len(config['xml_example']),2)
+
+    def test_fingerprint_audio_headers_and_untrusted_client_value(self):
+        fingerprint = json.loads(self.request('/api/preview', XML_PAYLOAD)[1])['fingerprint']
+        with patch.object(self.s.jobs, 'start', return_value={'id':'synthetic'}) as start:
+            payload={**XML_PAYLOAD, 'consent':True, 'fingerprint':'0'*64}
+            self.assertEqual(self.request('/api/jobs',payload)[0],202)
+            self.assertEqual(start.call_args.kwargs['fingerprint'],fingerprint)
+        with tempfile.TemporaryDirectory() as directory:
+            folder=Path(directory);(folder/'dialogue.mp3').write_bytes(b'fake audio')
+            with patch.object(self.s.jobs, 'snapshot', return_value={'status':'done','fingerprint':fingerprint}), patch.dict(self.s.jobs.items, {'synthetic':{'folder':folder}}):
+                status,_,headers=self.request('/api/jobs/synthetic/audio')
+                self.assertEqual(status,200);self.assertEqual(headers['X-Dialogue-Fingerprint'],fingerprint)
+                status,_,headers=self.request('/api/jobs/synthetic/audio',headers={'Range':'bytes=0-3'})
+                self.assertEqual(status,206);self.assertEqual(headers['X-Dialogue-Fingerprint'],fingerprint)
+        with patch.object(self.s.batches,'open_output',return_value=(io.BytesIO(b'fake audio'),'dialogue-001.mp3',10)), patch.object(self.s.batches,'audio_fingerprint',return_value=fingerprint):
+            status,_,headers=self.request('/api/batches/synthetic/audio/001')
+            self.assertEqual(status,200);self.assertEqual(headers['X-Dialogue-Fingerprint'],fingerprint)
 
     def test_unknown_job_and_path(self):
         self.assertEqual(self.request('/api/jobs/unknown')[0],404)

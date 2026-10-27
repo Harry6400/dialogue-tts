@@ -13,7 +13,7 @@ class FakeJobs:
     def __init__(self):
         self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
         self.lock=threading.RLock(); self.items={}; self.calls=[]; self.fail={'bad'}; self.wait=False
-    def start(self, script, batch_owner=None):
+    def start(self, script, batch_owner=None, fingerprint=None):
         ident=str(len(self.calls)); text=script['lines'][0]['text']; self.calls.append(text)
         folder=self.root/ident;folder.mkdir();(folder/'dialogue.mp3').write_bytes(b'fake-mp3')
         self.items[ident]={'folder':folder,'status':'running' if self.wait else ('error' if text in self.fail else 'done')}
@@ -32,6 +32,18 @@ class BatchTests(unittest.TestCase):
         while self.b.active and time.monotonic()<deadline: time.sleep(.01)
         self.assertIsNone(self.b.active)
         return self.b.snapshot(ident)
+    def test_fifty_call_batch_generates_all(self):
+        payload = self.payload(tuple('good' for _ in range(50)))
+        result = self.finish(self.b.start(payload)['id'])
+        self.assertEqual(result['completed'], 50)
+        self.assertEqual(len(self.jobs.calls), 50)
+        for row in result['items']:
+            self.assertRegex(row['fingerprint'], r'^[0-9a-f]{64}$')
+            number = row['download_url'].rsplit('/', 1)[1]
+            self.assertEqual(self.b.audio_fingerprint(result['id'], number), row['fingerprint'])
+        with zipfile.ZipFile(self.b.output(result['id'])) as archive:
+            self.assertEqual(len(archive.namelist()), 50)
+
     def test_failure_isolation_retry_and_idempotence(self):
         p=self.payload(('good','bad','later')); ident=self.b.start(p)['id']
         self.assertEqual(self.b.start(p)['id'],ident)

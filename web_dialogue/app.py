@@ -25,7 +25,7 @@ def normalize_source(payload):
         raise InputError("仅支持双声道 XML 输入。")
     return normalize(payload)
 
-MAX_BODY = 6 * 1024 * 1024
+MAX_BODY = 64 * 1024 * 1024
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -38,7 +38,7 @@ class Jobs:
         self.items = {}
         self.lock = threading.RLock()
 
-    def start(self, script, request_id=None, batch_owner=None):
+    def start(self, script, request_id=None, batch_owner=None, fingerprint=None):
         with self.lock:
             if getattr(self, "batch_active", None) and batch_owner != self.batch_active:
                 raise InputError("已有批次正在合成，请等待完成或先取消。")
@@ -72,7 +72,7 @@ class Jobs:
             finally:
                 log.close()
             self.items[ident] = {"folder": folder, "process": process, "total": len(script["lines"]),
-                                 "started": time.monotonic(), "cancelled": False, "timed_out": False}
+                                 "fingerprint": fingerprint, "started": time.monotonic(), "cancelled": False, "timed_out": False}
             timer = threading.Timer(self.timeout_seconds, self.expire, args=(ident,))
             timer.daemon = True
             self.items[ident]["timer"] = timer
@@ -143,6 +143,8 @@ class Jobs:
                     result["download_url"] = f"/api/jobs/{ident}/audio"
                     result["normalized_url"] = f"/api/jobs/{ident}/normalized"
                     result["timeline_url"] = f"/api/jobs/{ident}/timeline"
+            if item.get("fingerprint"):
+                result["fingerprint"] = item["fingerprint"]
             return result
 
     def cancel(self, ident):
@@ -238,6 +240,8 @@ class Handler(BaseHTTPRequestHandler):
                     with handle:
                         self.headers_for(200, 'audio/mpeg' if len(parts) == 5 else 'application/zip', size)
                         self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+                        if len(parts) == 5:
+                            self.send_header('X-Dialogue-Fingerprint', self.server.batches.audio_fingerprint(parts[2], parts[4]))
                         self.end_headers()
                         shutil.copyfileobj(handle, self.wfile)
                     return
@@ -275,6 +279,8 @@ class Handler(BaseHTTPRequestHandler):
                     http_status = 206
                 self.headers_for(http_status, mime, end - start + 1)
                 self.send_header("Accept-Ranges", "bytes")
+                if parts[3] == "audio" and status.get("fingerprint"):
+                    self.send_header("X-Dialogue-Fingerprint", status["fingerprint"])
                 self.send_header("Content-Disposition", f'inline; filename="{filename}"')
                 if http_status == 206:
                     self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
@@ -294,6 +300,12 @@ class Handler(BaseHTTPRequestHandler):
         self.json({"error": "页面不存在。"}, 404)
 
     def do_POST(self):
+        with self.server.update_lock:
+            if self.server.update_in_progress and urlsplit(self.path).path != "/api/update/unlock":
+                return self.json({"error":"正在准备更新，请稍候。"}, 409)
+            return self._do_POST_locked()
+
+    def _do_POST_locked(self):
         if not self.authenticated():
             return
         if not self.valid_host():
@@ -307,10 +319,19 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_BODY:
-                return self.json({"error": "请求为空或超过6MB，请缩小输入文件。"}, 413)
+                return self.json({"error": "请求为空或超过64MiB，请缩小输入文件。"}, 413)
             self.connection.settimeout(15)
             payload = json.loads(self.rfile.read(length).decode("utf-8-sig"))
             path = urlsplit(self.path).path
+            if path == "/api/update/lock":
+                with self.server.jobs.lock, self.server.batches.lock:
+                    if any(item["process"].poll() is None for item in self.server.jobs.items.values()) or self.server.batches.active:
+                        return self.json({"error":"正在合成，请稍后更新"}, 409)
+                self.server.update_in_progress = True
+                return self.json({"ok":True})
+            if path == "/api/update/unlock":
+                self.server.update_in_progress = False
+                return self.json({"ok":True})
             if path == "/api/shutdown":
                 if not getattr(self.server, "can_shutdown", False):
                     return self.json({"error": "此入口未启用应用退出。"}, 403)
@@ -337,8 +358,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/jobs":
                 if not isinstance(payload, dict) or payload.get("consent") is not True:
                     raise InputError("请先确认：生成时会将脱敏后的文本发送至微软语音服务。")
-                script = normalize_source(payload)["script"]
-                return self.json(self.server.jobs.start(script, payload.get("request_id")), 202)
+                normalized = normalize_source(payload)
+                return self.json(self.server.jobs.start(normalized["script"], payload.get("request_id"), fingerprint=normalized["fingerprint"]), 202)
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "cancel":
                 return self.json(self.server.jobs.cancel(parts[2]))
@@ -376,6 +397,8 @@ def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None
         server.allowed_origins.add(public_origin.rstrip("/"))
     server.access_key = access_key
     server.token = secrets.token_urlsafe(32)
+    server.update_lock = threading.RLock()
+    server.update_in_progress = False
     server.jobs = Jobs()
     from .batches import Batches
     server.batches = Batches(server.jobs)

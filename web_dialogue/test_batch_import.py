@@ -1,5 +1,6 @@
 """Entirely fictional fixtures; no private conversation data."""
 import json
+import random
 import unittest
 from .batch_import import preview_batch
 from .normalize import InputError
@@ -30,22 +31,22 @@ class BatchImportTests(unittest.TestCase):
         r = preview_batch({'files': [f(xml('USER')), f(xml('AGENT', 'other-call'))]})
         self.assertEqual(r['counts'], {'ready': 0, 'error': 2})
 
-    def test_missing_time_needs_manual(self):
+    def test_missing_time_still_groups_by_ref(self):
         files = [f(xml('USER', start='')), f(xml('AGENT', start=''))]
-        self.assertEqual(preview_batch({'files': files})['counts']['ready'], 0)
-        self.assertEqual(preview_batch({'files': files, 'pairs': [[1, 0]]})['counts']['ready'], 1)
+        self.assertEqual(preview_batch({'files': files})['counts']['ready'], 1)
 
-    def test_manual_conflicting_metadata(self):
+    def test_manual_pairing_disabled(self):
         files = [f(xml('USER')), f(xml('AGENT', 'other-call'))]
-        r = preview_batch({'files': files, 'pairs': [[0, 1]]})
-        self.assertEqual(r['counts']['error'], 1)
-        self.assertNotIn('other-call', json.dumps(r))
+        with self.assertRaises(InputError):
+            preview_batch({'files': files, 'pairs': [[0, 1]]})
 
     def test_duplicate_and_overfull(self):
         for files in ([f(xml('USER')), f(xml('AGENT')), f(xml('USER'))],
+                      [f(xml('USER')), f(xml('AGENT')), f(xml('AGENT', text='other'))],
                       [f(xml('USER')), f(xml('AGENT')), f(xml('OTHER'))]):
-            self.assertEqual(preview_batch({'files': files})['counts']['ready'], 0)
-            self.assertEqual(preview_batch({'files': files, 'pairs': [[0, 1]]})['counts']['ready'], 0)
+            result = preview_batch({'files': files})
+            self.assertEqual(result['counts'], {'ready': 0, 'error': 1})
+            self.assertIn('重复声道', result['groups'][0]['error'])
 
     def test_same_role(self):
         r = preview_batch({'files': [f(xml('USER')), f(xml('USER', text='不同内容'))]})
@@ -82,7 +83,9 @@ class BatchImportTests(unittest.TestCase):
 
     def test_duration_conflict(self):
         files = [f(xml('AGENT')), f(xml('USER').replace('<duration>4</duration>', '<duration>5</duration>'))]
-        self.assertEqual(preview_batch({'files': files})['counts']['error'], 1)
+        result = preview_batch({'files': files})
+        self.assertEqual(result['counts']['ready'], 1)
+        self.assertTrue(any('时长' in x for x in result['groups'][0]['preview']['warnings']))
 
     def test_explicit_voice_persists_across_batch(self):
         files = [f(xml('AGENT')), f(xml('USER')), f(xml('AGENT', 'other')), f(xml('USER', 'other'))]
@@ -90,8 +93,40 @@ class BatchImportTests(unittest.TestCase):
         self.assertEqual(r['counts']['ready'], 2)
         self.assertTrue(all(line['voice'] == 'zh-CN-YunxiNeural' for g in r['groups'] for line in g['preview']['script']['lines'] if line['speaker'] == 'USER'))
 
+    def test_hundred_shuffled_same_filenames_fifty_calls(self):
+        files = [f(xml(role, '00000000000000000000000000000000000000000000000' + str(i)))
+                 for i in range(50) for role in ('AGENT', 'USER')]
+        random.Random(7).shuffle(files)
+        result = preview_batch({'files': files})
+        self.assertEqual(result['counts'], {'ready': 50, 'error': 0})
+        for group in result['groups']:
+            left, right = group['file_indices']
+            self.assertNotEqual(left, right)
+
+    def test_leading_zeros_case_and_precision_are_identity(self):
+        refs = ('0009007199254740993', '9007199254740993', '9007199254740992', 'Call', 'call')
+        files = [f(xml(role, ref)) for ref in refs for role in ('USER', 'AGENT')]
+        self.assertEqual(preview_batch({'files': files})['counts']['ready'], 5)
+
+    def test_missing_or_wrong_case_id_cannot_pair(self):
+        for change in (lambda x: x.replace('callReference', 'callreference'),
+                       lambda x: x.replace('fiction-call-1', ''),
+                       lambda x: x.replace('</callReference>', '</callReference><callReference>second</callReference>')):
+            result = preview_batch({'files': [f(change(xml('AGENT'))), f(xml('USER'))]})
+            self.assertEqual(result['counts']['ready'], 0)
+
+    def test_missing_role_is_explicit(self):
+        for role, missing in (('AGENT', 'USER'), ('USER', 'AGENT')):
+            result = preview_batch({'files': [f(xml(role))]})
+            self.assertIn('缺少 ' + missing, result['groups'][0]['error'])
+
+    def test_start_time_mismatch_is_warning_not_group_key(self):
+        result = preview_batch({'files': [f(xml('AGENT')), f(xml('USER', start='different'))]})
+        self.assertEqual(result['counts'], {'ready': 1, 'error': 0})
+        self.assertTrue(any('开始时间' in x for x in result['groups'][0]['preview']['warnings']))
+
     def test_limits(self):
-        for files in ([], [f('{}', 'a.json')] * 41, [f('a' * (2 * 1024 * 1024 + 1))], [f('a' * (2 * 1024 * 1024))] * 4):
+        for files in ([], [f('{}', 'a.json')] * 101, [f('a' * (2 * 1024 * 1024 + 1))], [f('a' * (2 * 1024 * 1024))] * 11):
             with self.assertRaises(InputError):
                 preview_batch({'files': files})
 

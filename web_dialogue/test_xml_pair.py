@@ -29,6 +29,13 @@ class XMLPairTests(unittest.TestCase):
   p=payload();p['xml_files'][0]['content']=p['xml_files'][0]['content'].replace('fictional-demo-001','private-secret-id')
   with self.assertRaises(InputError) as cm:normalize(p)
   self.assertNotIn('private-secret-id',str(cm.exception))
+ def test_missing_call_id_rejected_even_single_pair(self):
+  for tag in ('callReference', 'callreference'):
+   p=payload();p['xml_files'][0]['content']=p['xml_files'][0]['content'].replace('<callReference>fictional-demo-001</callReference>', '<'+tag+'></'+tag+'>')
+   with self.assertRaises(InputError):normalize(p)
+ def test_metadata_disagreement_warns(self):
+  p=payload();p['xml_files'][0]['content']=p['xml_files'][0]['content'].replace('<callInfo>', '<callInfo><startTime>one</startTime>');p['xml_files'][1]['content']=p['xml_files'][1]['content'].replace('<callInfo>', '<callInfo><startTime>two</startTime>')
+  self.assertTrue(any('开始时间' in x for x in normalize(p)['warnings']))
  def test_muted_text_not_exported(self):
   p=payload();p['xml_files'][1]['content']=p['xml_files'][1]['content'].replace('这是一句虚构的屏蔽段落。','secret-never-speak')
   r=normalize(p);self.assertNotIn('secret-never-speak',json.dumps(r))

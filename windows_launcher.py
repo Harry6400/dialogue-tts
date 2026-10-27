@@ -10,15 +10,21 @@ import urllib.request
 import webbrowser
 
 
-class NativeDownloads:
+from native_windows_folders import NativeFolderMixin
+from native_windows_updater import NativeUpdaterMixin
+
+
+class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
     """Only app-owned successful saves may be revealed; JS never supplies a path."""
     def __init__(self, base):
         self._base = base
         self._window = None
         self._saved = {}
         self._lock = threading.Lock()
+        self._setup_folders()
 
     def save_download(self, route):
+        if getattr(getattr(self,"_update_server",None),"update_in_progress",False): return {"ok":False,"error":"正在准备更新"}
         import re
         import tempfile
         import uuid
@@ -59,7 +65,7 @@ class NativeDownloads:
             os.replace(temporary, target); temporary = None
             ident = uuid.uuid4().hex
             self._saved[ident] = target
-            record = {'save_id': ident, 'name': target.name, 'path': str(target)}
+            record = {'save_id': ident, 'name': target.name, 'path': str(target), 'resource_path': route}
             try:
                 self._window.evaluate_js('window.dialogueNativeSaved && window.dialogueNativeSaved(' + json.dumps(record, ensure_ascii=True) + ')')
             except Exception:
@@ -71,6 +77,10 @@ class NativeDownloads:
             if temporary:
                 Path(temporary).unlink(missing_ok=True)
             self._lock.release()
+
+    def save_to_output(self, resource_path, folder_id):
+        if getattr(getattr(self,"_update_server",None),"update_in_progress",False): return {"ok":False,"error":"正在准备更新"}
+        return super().save_to_output(resource_path, folder_id)
 
     def reveal_saved(self, save_id):
         if not isinstance(save_id, str): return {'ok': False}
@@ -141,6 +151,14 @@ def self_test(report_path, live=False):
                             opened = bridge.reveal_saved(saved.get('save_id'))
                             report['native_save_reveal'] = bool(saved.get('ok') and target.read_bytes() == audio and callbacks and opened.get('ok') and reveal.call_args.args[0] == str(target.parent) and not bridge.reveal_saved('unknown').get('ok'))
                         if not report['native_save_reveal']: raise RuntimeError('Native save/reveal test failed')
+                        bridge._setup_folders(Path(folder) / 'private-preferences.json')
+                        folder_cap = bridge._authorize(Path(folder), 'output')['folder_id']
+                        folder_saved = bridge.save_to_output(status['download_url'], folder_cap)
+                        duplicate = bridge.save_to_output(status['download_url'], folder_cap)
+                        completed = bridge.check_completed(folder_cap, [preview['fingerprint']])
+                        report['native_folder_export'] = bool(folder_saved.get('ok') and duplicate.get('path') == folder_saved.get('path') and len(completed.get('completed', [])) == 1 and Path(folder_saved['path']).read_bytes() == audio)
+                        if not report['native_folder_export']: raise RuntimeError('Native folder export verification failed')
+
                     break
                 if status["status"] in {"error", "cancelled"}:
                     raise RuntimeError(status.get("error", status["status"]))
@@ -194,6 +212,8 @@ def run_window(gui_report=None):
         else: missing_runtime_message()
         return 1
     import webview
+    from web_dialogue.install_lock import InstallationLease
+    installation_lease=InstallationLease(sys.executable).acquire() if getattr(sys,'frozen',False) else None
     from web_dialogue.app import make_server
     server = make_server(0)
     # The native window close control owns the shutdown lifecycle.
@@ -208,8 +228,15 @@ def run_window(gui_report=None):
     downloads = NativeDownloads(url)
     window = webview.create_window('对白', url, js_api=downloads, width=1180, height=840, min_size=(760,620), background_color='#F5F7F8')
     downloads._window = window
+    downloads._setup_updater(server)
+    def acknowledge_update():
+        if len(sys.argv)==4 and sys.argv[1]=="--update-receipt":
+            from web_dialogue.update_helper import acknowledge_receipt
+            acknowledge_receipt(sys.argv[2],sys.argv[3])
+    window.events.loaded += acknowledge_update
     report = {'frozen':bool(getattr(sys,'frozen',False)), 'platform':sys.platform, 'passed':False}
     def closing():
+        if getattr(server,"update_in_progress",False) and downloads._updater.state.get("state") != "waiting_for_exit": return False
         if gui_report: return True
         with server.jobs.lock:
             running = any(item['process'].poll() is None for item in server.jobs.items.values())
@@ -248,6 +275,7 @@ def run_window(gui_report=None):
         else: raise
     finally:
         server.shutdown(); server.server_close(); server.jobs.close()
+        if installation_lease: installation_lease.close()
         if gui_report:
             timeout.cancel()
             Path(gui_report).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
@@ -255,6 +283,8 @@ def run_window(gui_report=None):
 
 
 def main():
+    from web_dialogue.updater_cli import dispatch
+    if dispatch(sys.argv[1:]): return 0
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         from web_dialogue.worker import main as worker_main
         worker_main(sys.argv[2])

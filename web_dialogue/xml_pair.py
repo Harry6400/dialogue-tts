@@ -10,6 +10,18 @@ class XMLImportError(ValueError):
     pass
 
 
+def call_identity(root, require_role=True):
+    # Exactly one case-sensitive field; identifiers are opaque strings, not numbers.
+    refs = root.findall('./callInfo/callReference')
+    roles = root.findall('./callInfo/role')
+    if len(refs) != 1 or refs[0].text is None or not refs[0].text.strip() or len(refs[0].text) > 4096 or len(refs[0]):
+        raise XMLImportError('XML缺少唯一有效 callInfo/callReference，不能配对。')
+    valid_role = len(roles) == 1 and roles[0].text in {'AGENT', 'USER'} and not len(roles[0])
+    if require_role and not valid_role:
+        raise XMLImportError('XML声道标记必须为唯一 AGENT 或 USER，不能猜测说话人。')
+    return refs[0].text, roles[0].text if valid_role else None
+
+
 def number_ms(value, unit):
     try:
         n = Decimal(value.strip())
@@ -52,14 +64,12 @@ def parse_xml_pair(payload):
             raise XMLImportError('当前XML需使用 analyze / subject / function 结构。')
         if sum(1 for _ in root.iter()) > 10000:
             raise XMLImportError('XML节点过多，请缩小文件。')
-        role = (root.findtext('./callInfo/role') or '').strip()
-        if role not in {'AGENT', 'USER'}:
-            raise XMLImportError('XML声道标记必须为 AGENT 或 USER，不能猜测说话人。')
+        ref, role = call_identity(root)
         if role in roles:
             raise XMLImportError('两份XML的role相同，请检查是否重复选择了同一声道。')
         roles.append(role)
         # Compare metadata only in memory. Never include it in output or errors.
-        refs.append((root.findtext('./callInfo/callReference') or '').strip())
+        refs.append(ref)
         starts.append((root.findtext('./callInfo/startTime') or '').strip())
         durations.append((root.findtext('./callInfo/duration') or '').strip())
         muted_ranges = []
@@ -92,11 +102,8 @@ def parse_xml_pair(payload):
                     raise XMLImportError('对话段缺少非空text文本。')
             combined.append({'speaker': role, 'text': text, 'start_ms': start_ms, 'end_ms': end_ms,
                              'muted': muted, '_file_index': file_index, '_segment_index': segment_index})
-    if all(refs) and refs[0] != refs[1]:
+    if refs[0] != refs[1]:
         raise XMLImportError('两份XML的对话标识不一致，请选择同一通对话的两个声道。')
-    for values in (starts, durations):
-        if all(values) and values[0] != values[1]:
-            raise XMLImportError('两份XML的对话元数据不一致，请检查配对。')
     if len(combined) > 100:
         raise XMLImportError('两份文件合计最多100段，请拆分后处理。')
     combined.sort(key=lambda row: (row['start_ms'], row['_file_index'], row['_segment_index']))
@@ -106,10 +113,11 @@ def parse_xml_pair(payload):
         del row['_file_index']; del row['_segment_index']
     muted_count = sum(row['muted'] for row in combined)
     warnings = [f'XML未声明时间单位，当前按{"毫秒" if unit == "ms" else "秒"}解析；请核对预览。', '按起点排序串行配音，不还原原始时长或重叠说话。']
-    if not all(refs):
-        warnings.append('有文件缺少对话标识，请自行确认这两份属于同一通对话。')
+    for label, values in (('开始时间', starts), ('时长', durations)):
+        if all(values) and values[0] != values[1]:
+            warnings.append('相同 callReference 的' + label + '不一致；仍按段内时间排序，请核对质量。')
     if muted_count:
         warnings.append(f'已保护 {muted_count} 个静音片段：预览不显示原文，生成时跳过，不发送微软。')
     if not any(not row['muted'] for row in combined):
         raise XMLImportError('所有片段均被静音保护，没有可合成内容。')
-    return {'rows': combined, 'sources': sources, 'warnings': warnings, 'muted_count': muted_count}
+    return {'_call_reference': refs[0], 'rows': combined, 'sources': sources, 'warnings': warnings, 'muted_count': muted_count}

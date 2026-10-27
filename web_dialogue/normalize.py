@@ -49,6 +49,8 @@ def normalize(payload):
         result["warnings"] = imported["warnings"] + result["warnings"]
         result["sources"] = imported["sources"]
         result["muted_count"] = imported["muted_count"]
+        from .fingerprints import dialogue_fingerprint
+        result["fingerprint"] = dialogue_fingerprint(imported["_call_reference"], result["script"])
         result["format"] = "xml_pair"
         return result
     if not isinstance(payload, dict) or "data" not in payload:
