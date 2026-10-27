@@ -1,0 +1,123 @@
+import json
+from pathlib import Path
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import patch
+import zipfile
+from .batches import Batches
+from .normalize import InputError
+
+class FakeJobs:
+    def __init__(self):
+        self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
+        self.lock=threading.RLock(); self.items={}; self.calls=[]; self.fail={'bad'}; self.wait=False
+    def start(self, script, batch_owner=None):
+        ident=str(len(self.calls)); text=script['lines'][0]['text']; self.calls.append(text)
+        folder=self.root/ident;folder.mkdir();(folder/'dialogue.mp3').write_bytes(b'fake-mp3')
+        self.items[ident]={'folder':folder,'status':'running' if self.wait else ('error' if text in self.fail else 'done')}
+        return {'id':ident}
+    def snapshot(self, ident):
+        return {'id':ident,'status':self.items[ident]['status'],'completed':1,'total':1}
+    def cancel(self, ident): self.items[ident]['status']='cancelled'
+
+class BatchTests(unittest.TestCase):
+    def setUp(self): self.jobs=FakeJobs(); self.b=Batches(self.jobs)
+    def tearDown(self): self.b.close();self.jobs.temp.cleanup()
+    def payload(self, texts=('good','bad')):
+        return {'files':[{'name':f'../../secret{i}.json','content':json.dumps([{'speaker':'A','text':t}])} for i,t in enumerate(texts)],'consent':True,'request_id':'request-123'}
+    def finish(self, ident):
+        deadline=time.monotonic()+5
+        while self.b.active and time.monotonic()<deadline: time.sleep(.01)
+        self.assertIsNone(self.b.active)
+        return self.b.snapshot(ident)
+    def test_failure_isolation_retry_and_idempotence(self):
+        p=self.payload(('good','bad','later')); ident=self.b.start(p)['id']
+        self.assertEqual(self.b.start(p)['id'],ident)
+        self.assertEqual(self.finish(ident)['completed'],2)
+        self.jobs.fail.clear();self.b.retry(ident)
+        self.assertEqual(self.finish(ident)['completed'],3)
+        self.assertEqual(self.jobs.calls,['good','bad','later','bad'])
+        with self.assertRaises(InputError): self.b.retry(ident)
+        self.assertEqual(self.b.start(p)['id'],ident)
+        with self.assertRaises(InputError): self.b.start(self.payload(('changed',)))
+    def test_cancel_does_not_repeat_success(self):
+        self.jobs.wait=True; ident=self.b.start(self.payload())['id']
+        while not self.jobs.calls: time.sleep(.01)
+        self.b.cancel(ident);result=self.finish(ident)
+        self.assertEqual(result['status'],'cancelled');self.assertEqual(len(self.jobs.calls),1)
+        with self.assertRaises(InputError): self.b.retry(ident)
+    def test_zip_safe_and_audio_individual(self):
+        ident=self.b.start(self.payload(('good','good')))['id'];self.finish(ident)
+        with zipfile.ZipFile(self.b.output(ident)) as z:
+            self.assertEqual(z.namelist(),['dialogue-001.mp3','dialogue-002.mp3'])
+            self.assertEqual(z.read('dialogue-001.mp3'),b'fake-mp3')
+        self.assertEqual(self.b.output(ident,'001').read_bytes(),b'fake-mp3')
+        with self.assertRaises(KeyError): self.b.output(ident,'../../secret')
+    def test_zip_cached_and_open_snapshot_stable(self):
+        ident=self.b.start(self.payload(('good','bad')))['id'];self.finish(ident)
+        target=self.b.output(ident);before=target.stat().st_mtime_ns
+        handle, name, size=self.b.open_output(ident)
+        self.assertEqual(self.b.output(ident).stat().st_mtime_ns,before)
+        with handle, zipfile.ZipFile(handle) as z:
+            self.assertEqual(z.namelist(),['dialogue-001.mp3'])
+        self.jobs.fail.clear();self.b.retry(ident);self.finish(ident)
+        with zipfile.ZipFile(self.b.output(ident)) as z:
+            self.assertEqual(len(z.namelist()),2)
+
+    def test_windows_locked_zip_retry_preserves_old_download(self):
+        ident=self.b.start(self.payload(('good','bad')))['id'];self.finish(ident)
+        old=self.b.output(ident); handle, _, _=self.b.open_output(ident)
+        self.jobs.fail.clear()
+        with patch.object(Path,'unlink',side_effect=PermissionError('Windows sharing violation')):
+            self.b.retry(ident);self.finish(ident)
+            new=self.b.output(ident)
+            self.assertNotEqual(old,new)
+            with zipfile.ZipFile(handle) as z:self.assertEqual(len(z.namelist()),1)
+            with zipfile.ZipFile(new) as z:self.assertEqual(len(z.namelist()),2)
+        handle.close()
+
+    def test_windows_locked_retirement_bounded(self):
+        with patch('web_dialogue.batches.shutil.rmtree',side_effect=PermissionError('locked')):
+            for i in range(10):
+                p=self.payload(('good',));p['request_id']=f'request-{i:03d}'
+                self.finish(self.b.start(p)['id'])
+            self.assertEqual(len(self.b.items),5);self.assertEqual(len(self.b.retired),5)
+            p=self.payload(('good',));p['request_id']='request-over-limit'
+            with self.assertRaises(InputError):self.b.start(p)
+        self.b._reap_retired();self.assertFalse(self.b.retired)
+
+    def test_zip_generations_bounded_while_downloads_open(self):
+        ident=self.b.start(self.payload())['id'];self.finish(ident);handles=[]
+        for _ in range(3):
+            handles.append(self.b.open_output(ident)[0])
+            self.b.retry(ident);self.finish(ident)
+        with self.assertRaises(InputError):self.b.output(ident)
+        for handle in handles:handle.close()
+        self.assertTrue(self.b.output(ident).is_file())
+        self.assertEqual(len(list((self.b.root/ident).glob('*.zip'))),1)
+
+    def test_active_download_not_evicted(self):
+        leases=[]
+        for i in range(5):
+            p=self.payload(('good',));p['request_id']=f'request-{i:03d}'
+            ident=self.b.start(p)['id'];self.finish(ident)
+            leases.append(self.b.open_output(ident)[0])
+        p=self.payload(('good',));p['request_id']='request-new-batch'
+        with self.assertRaises(InputError):self.b.start(p)
+        for handle in leases:handle.close()
+        self.finish(self.b.start(p)['id'])
+
+    def test_invalid_groups_exclusion(self):
+        p=self.payload();p['files'][1]['content']='not json'
+        with self.assertRaises(InputError):self.b.start(p)
+        p['excluded']=['g1'];ident=self.b.start(p)['id']
+        self.assertEqual(self.finish(ident)['completed'],1)
+    def test_parallel_batch_guard(self):
+        self.jobs.wait=True;ident=self.b.start(self.payload())['id']
+        p=self.payload();p['request_id']='request-456'
+        with self.assertRaises(InputError):self.b.start(p)
+        self.b.cancel(ident);self.finish(ident)
+
+if __name__=='__main__':unittest.main()

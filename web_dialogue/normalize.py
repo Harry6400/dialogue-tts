@@ -102,7 +102,8 @@ def normalize(payload):
             raise InputError("总文本超过 20000 字符，请分批处理。")
         if speaker not in speakers:
             speakers.append(speaker)
-        voice = mapping.get(speaker, VOICES[(speakers.index(speaker)) % 2]["id"])
+        default_index = {"AGENT": 0, "A": 0, "USER": 1, "B": 1}.get(speaker, speakers.index(speaker) % 2)
+        voice = mapping.get(speaker, VOICES[default_index]["id"])
         if not isinstance(voice, str) or voice not in allowed:
             raise InputError(f"角色 {speaker} 的音色不在当前支持列表，请重新选择。")
         clean.append({"id": i, "speaker": speaker, "text": text, "voice": voice,

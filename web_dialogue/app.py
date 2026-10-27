@@ -32,8 +32,10 @@ class Jobs:
         self.items = {}
         self.lock = threading.RLock()
 
-    def start(self, script, request_id=None):
+    def start(self, script, request_id=None, batch_owner=None):
         with self.lock:
+            if getattr(self, "batch_active", None) and batch_owner != self.batch_active:
+                raise InputError("已有批次正在合成，请等待完成或先取消。")
             if request_id is not None:
                 if not isinstance(request_id, str) or not 8 <= len(request_id) <= 100 or not all(c.isalnum() or c in "-_" for c in request_id):
                     raise InputError("请求标识无效，请刷新页面。")
@@ -151,6 +153,8 @@ class Jobs:
             return self.snapshot(ident)
 
     def close(self):
+        if hasattr(self, "batches"):
+            self.batches.close()
         with self.lock:
             for item in self.items.values():
                 item["timer"].cancel()
@@ -219,6 +223,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             return self.json({"token": self.server.token, "voices": VOICES, "example": EXAMPLE, "can_shutdown": getattr(self.server, "can_shutdown", False)})
         parts = path.strip("/").split("/")
+        if len(parts) in (3, 4, 5) and parts[:2] == ["api", "batches"]:
+            try:
+                if len(parts) == 3:
+                    return self.json(self.server.batches.snapshot(parts[2]))
+                if (len(parts) == 4 and parts[3] == 'zip') or (len(parts) == 5 and parts[3] == 'audio'):
+                    handle, filename, size = self.server.batches.open_output(parts[2], parts[4] if len(parts) == 5 else None)
+                    with handle:
+                        self.headers_for(200, 'audio/mpeg' if len(parts) == 5 else 'application/zip', size)
+                        self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+                        self.end_headers()
+                        shutil.copyfileobj(handle, self.wfile)
+                    return
+            except KeyError:
+                return self.json({'error': '批次或输出不存在。'}, 404)
+            except InputError as exc:
+                return self.json({'error': str(exc)}, 409)
+            except OSError:
+                return self.json({'error': '输出暂时被占用，请稍后重试下载。'}, 409)
         if len(parts) in (3, 4) and parts[:2] == ["api", "jobs"]:
             try:
                 status = self.server.jobs.snapshot(parts[2])
@@ -289,6 +311,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.json({"status": "closing"})
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return
+            if not isinstance(payload, dict):
+                raise InputError('请求必须为对象。')
+            if path == '/api/batches/preview':
+                from .batch_import import preview_batch
+                return self.json(preview_batch(payload))
+            if path == '/api/batches':
+                return self.json(self.server.batches.start(payload), 202)
+            batch_parts = path.strip('/').split('/')
+            if len(batch_parts) == 4 and batch_parts[:2] == ['api', 'batches']:
+                if batch_parts[3] == 'cancel':
+                    return self.json(self.server.batches.cancel(batch_parts[2]))
+                if batch_parts[3] == 'retry':
+                    if payload.get('consent') is not True:
+                        raise InputError('请确认将脱敏文本发送至微软语音服务。')
+                    return self.json(self.server.batches.retry(batch_parts[2]))
             if path == "/api/preview":
                 return self.json(normalize(payload))
             if path == "/api/jobs":
@@ -334,6 +371,9 @@ def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None
     server.access_key = access_key
     server.token = secrets.token_urlsafe(32)
     server.jobs = Jobs()
+    from .batches import Batches
+    server.batches = Batches(server.jobs)
+    server.jobs.batches = server.batches
     return server
 
 

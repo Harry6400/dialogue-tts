@@ -4,6 +4,12 @@ from .normalize import EXAMPLE, InputError, normalize
 
 
 class NormalizeTests(unittest.TestCase):
+    def test_named_role_defaults_independent_of_order(self):
+        for speakers in [('USER','AGENT'),('B','A')]:
+            result=normalize({'data':[{'speaker':s,'text':'虚构测试'} for s in speakers]})
+            self.assertEqual([r['voice'] for r in result['script']['lines']],
+                             ['zh-CN-XiaoyiNeural','zh-CN-XiaoxiaoNeural'])
+
     def test_default_and_original_unchanged(self):
         original = copy.deepcopy(EXAMPLE)
         result = normalize({"data": original})

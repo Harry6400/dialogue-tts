@@ -59,6 +59,18 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn('第 1 条', json.loads(body)['error'])
 
+    def test_batch_preview_auth_and_consent(self):
+        payload = {'files': [{'name':'a.json', 'content': json.dumps(EXAMPLE)},
+                             {'name':'b.json', 'content': json.dumps(EXAMPLE)}]}
+        status, body, _ = self.request('/api/batches/preview', payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)['counts']['ready'], 2)
+        self.assertEqual(self.request('/api/batches',payload)[0],400)
+        self.assertEqual(self.request('/api/batches/preview',payload,{'Origin':'https://evil.example'})[0],403)
+        self.assertEqual(self.request('/api/batches/unknown/retry',{})[0],400)
+        self.assertEqual(self.request('/api/batches/unknown')[0],404)
+        self.assertEqual(self.request('/api/batches/unknown/audio/../../../etc/passwd')[0],404)
+
     def test_unknown_job_and_path(self):
         self.assertEqual(self.request('/api/jobs/unknown')[0],404)
         self.assertEqual(self.request('/../../etc/passwd')[0],404)

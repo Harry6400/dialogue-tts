@@ -40,7 +40,7 @@ exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='DialogueTTSService', 
     disable_windowed_traceback=False, argv_emulation=False, target_arch='arm64', codesign_identity=None, entitlements_file=None)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='DialogueTTSService')
 app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.github.Harry6400.dialoguetts',
-    info_plist={{'CFBundleDisplayName':'对白', 'CFBundleShortVersionString':'0.1.0', 'CFBundleVersion':'1',
+    info_plist={{'CFBundleDisplayName':'对白', 'CFBundleShortVersionString':'0.2.0', 'CFBundleVersion':'2',
     'LSMinimumSystemVersion':'12.0', 'NSHighResolutionCapable':True, 'LSApplicationCategoryType':'public.app-category.utilities'}})
 ''', encoding='utf-8')
     env = dict(os.environ, PYINSTALLER_CONFIG_DIR=str(work / 'cache'))
