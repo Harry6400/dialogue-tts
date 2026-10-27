@@ -77,6 +77,7 @@ def preview_batch(payload):
             if any(role not in {'AGENT', 'USER'} for role in roles):
                 raise InputError('XML声道标记必须为唯一 AGENT 或 USER，不能猜测说话人。')
             if len(indices) != 2:
+                group['error_code'] = 'missing_track'
                 missing = 'USER' if roles == ['AGENT'] else 'AGENT'
                 raise InputError('此通话缺少 ' + missing + ' 声道。')
             candidate = {**options, 'format': 'xml_pair', 'xml_files': [

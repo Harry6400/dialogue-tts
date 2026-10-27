@@ -30,6 +30,7 @@ class BatchImportTests(unittest.TestCase):
     def test_missing_track_not_guessed(self):
         r = preview_batch({'files': [f(xml('USER')), f(xml('AGENT', 'other-call'))]})
         self.assertEqual(r['counts'], {'ready': 0, 'error': 2})
+        self.assertTrue(all(g['error_code'] == 'missing_track' for g in r['groups']))
 
     def test_missing_time_still_groups_by_ref(self):
         files = [f(xml('USER', start='')), f(xml('AGENT', start=''))]

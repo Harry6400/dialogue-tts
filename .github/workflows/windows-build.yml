@@ -36,6 +36,7 @@ jobs:
             dist/windows-smoke.json
             dist/windows-smoke.mp3
             dist/windows-gui-smoke.json
+            dist/windows-gui-*.png
             dist/windows-upgrade-smoke.json
             dist/windows-update-prompt-*.png
             dist/windows-update-target-*.png

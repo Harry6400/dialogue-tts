@@ -25,6 +25,16 @@ def normalize_source(payload):
         raise InputError("仅支持双声道 XML 输入。")
     return normalize(payload)
 
+def audition_script(payload):
+    if payload.get("consent") is not True:
+        raise InputError("请先允许发送试听文本至微软语音服务。")
+    sample = {"format": "xml_pair", "xml_files": XML_EXAMPLE,
+              "voices": payload.get("voices", {}), "rate": payload.get("rate", 1),
+              "pause_ms": payload.get("pause_ms", 250)}
+    script = normalize_source(sample)["script"]
+    script["lines"] = script["lines"][:2]
+    return script
+
 MAX_BODY = 64 * 1024 * 1024
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -38,7 +48,7 @@ class Jobs:
         self.items = {}
         self.lock = threading.RLock()
 
-    def start(self, script, request_id=None, batch_owner=None, fingerprint=None):
+    def start(self, script, request_id=None, batch_owner=None, fingerprint=None, audition=False):
         with self.lock:
             if getattr(self, "batch_active", None) and batch_owner != self.batch_active:
                 raise InputError("已有批次正在合成，请等待完成或先取消。")
@@ -52,12 +62,15 @@ class Jobs:
             for ident in self.items:
                 if self.snapshot(ident)["status"] in {"queued", "running"}:
                     raise InputError("已有任务正在合成，请等待完成或先取消。")
-            if len(self.items) >= 30:
-                # Bounded ephemeral history; do not remove any active job.
-                first = next(iter(self.items))
-                shutil.rmtree(self.items[first]["folder"], ignore_errors=True)
-                del self.items[first]
-                self.request_ids = {k:v for k,v in self.request_ids.items() if v != first}
+            audition_ids = [key for key, item in self.items.items() if item.get("audition")]
+            victim = audition_ids[0] if audition and len(audition_ids) >= 3 else None
+            production_ids = [key for key, item in self.items.items() if not item.get("audition")]
+            if not audition and len(production_ids) >= 30:
+                victim = production_ids[0]
+            if victim is not None:
+                shutil.rmtree(self.items[victim]["folder"], ignore_errors=True)
+                del self.items[victim]
+                self.request_ids = {k:v for k,v in self.request_ids.items() if v != victim}
             ident = uuid.uuid4().hex
             folder = self.root / ident
             folder.mkdir(mode=0o700)
@@ -72,7 +85,7 @@ class Jobs:
             finally:
                 log.close()
             self.items[ident] = {"folder": folder, "process": process, "total": len(script["lines"]),
-                                 "fingerprint": fingerprint, "started": time.monotonic(), "cancelled": False, "timed_out": False}
+                                 "fingerprint": fingerprint, "audition": audition, "started": time.monotonic(), "cancelled": False, "timed_out": False}
             timer = threading.Timer(self.timeout_seconds, self.expire, args=(ident,))
             timer.daemon = True
             self.items[ident]["timer"] = timer
@@ -355,6 +368,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json(self.server.batches.retry(batch_parts[2]))
             if path == "/api/preview":
                 return self.json(normalize_source(payload))
+            if path == "/api/audition":
+                script = audition_script(payload)
+                return self.json(self.server.jobs.start(script, payload.get("request_id"), audition=True), 202)
             if path == "/api/jobs":
                 if not isinstance(payload, dict) or payload.get("consent") is not True:
                     raise InputError("请先确认：生成时会将脱敏后的文本发送至微软语音服务。")

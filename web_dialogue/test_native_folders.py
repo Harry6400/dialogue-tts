@@ -59,6 +59,20 @@ class FolderTests(unittest.TestCase):
         self.assertEqual(restored['rate'],1.5);self.assertTrue(restored['input_folder']['valid'])
         self.assertNotEqual(restored['input_folder']['folder_id'], selected['folder_id'])
         self.assertFalse(self.host.set_preferences({'paths':{'output':'C:/escape'}})['ok'])
+    def test_output_space_uses_capability_and_cleans_probe(self):
+        result = self.host.check_output_space(self.out)
+        self.assertTrue(result['ok'])
+        self.assertTrue(result['writable'])
+        self.assertGreater(result['free_bytes'], 0)
+        self.assertEqual(list(self.output.iterdir()), [])
+        self.assertFalse(self.host.check_output_space(str(self.output))['ok'])
+        self.assertFalse(self.host.check_output_space(self.inc)['ok'])
+    def test_theme_persists_and_rejects_invalid_values(self):
+        self.assertEqual(self.host.get_preferences()['theme'], 'light')
+        self.assertTrue(self.host.set_preferences({'theme': 'dark'})['ok'])
+        self.assertEqual(Host(self.root).get_preferences()['theme'], 'dark')
+        self.assertFalse(self.host.set_preferences({'theme': 'invalid'})['ok'])
+        self.assertEqual(Host(self.root).get_preferences()['theme'], 'dark')
     def test_save_idempotent_collision_receipt_restart_delete_and_change(self):
         (self.output/'dialogue.mp3').write_bytes(b'unrelated')
         first=self.save();self.assertTrue(first['ok'], first);self.assertEqual(first['name'],'dialogue (1).mp3')

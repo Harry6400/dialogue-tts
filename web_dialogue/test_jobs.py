@@ -3,7 +3,7 @@ import sys
 import time
 import unittest
 from unittest.mock import patch
-from .app import Jobs
+from .app import Jobs, audition_script
 from .normalize import InputError, normalize
 from .test_normalize import EXAMPLE
 
@@ -47,6 +47,36 @@ class JobsTests(unittest.TestCase):
         with self.assertRaises(InputError): self.jobs.start(self.script)
         self.jobs.cancel(a['id'])
         self.assertEqual(self.jobs.start(self.script, 'request-123')['id'], a['id'])
+    def test_audition_uses_fixed_text_and_current_voices(self):
+        payload = {'consent': True, 'voices': {'AGENT': 'zh-CN-YunxiNeural', 'USER': 'zh-CN-XiaoxiaoNeural'}, 'rate': 1.25, 'pause_ms': 500, 'data': 'private input'}
+        sample = audition_script(payload)
+        self.assertEqual(len(sample['lines']), 2)
+        self.assertEqual({x['speaker']: x['voice'] for x in sample['lines']}, payload['voices'])
+        self.assertNotIn('private input', str(sample))
+        self.assertTrue(all(x['speech_rate'] == 1.25 for x in sample['lines']))
+        with self.assertRaises(InputError): audition_script({'consent': False})
+    def test_auditions_do_not_evict_production_jobs(self):
+        production = self.jobs.start(self.script, fingerprint='a'*64)
+        self.jobs.cancel(production['id'])
+        for i in range(29):
+            other = self.jobs.start(self.script)
+            self.jobs.cancel(other['id'])
+        for i in range(30):
+            sample = self.jobs.start(self.script, audition=True)
+            self.jobs.cancel(sample['id'])
+        self.assertIn(production['id'], self.jobs.items)
+        self.assertEqual(self.jobs.items[production['id']]['fingerprint'], 'a'*64)
+        self.assertEqual(sum(bool(x.get('audition')) for x in self.jobs.items.values()), 3)
+        self.assertTrue(all(x['fingerprint'] is None for x in self.jobs.items.values() if x.get('audition')))
+    def test_audition_history_does_not_reduce_production_capacity(self):
+        ids = []
+        for _ in range(27):
+            job = self.jobs.start(self.script); ids.append(job['id']); self.jobs.cancel(job['id'])
+        for _ in range(3):
+            job = self.jobs.start(self.script, audition=True); self.jobs.cancel(job['id'])
+        job = self.jobs.start(self.script); self.jobs.cancel(job['id'])
+        self.assertTrue(all(ident in self.jobs.items for ident in ids))
+        self.assertEqual(sum(not item.get('audition') for item in self.jobs.items.values()), 28)
     def test_bad_voice_type(self):
         for voice in ([], {}, None, 3):
             with self.subTest(voice=voice), self.assertRaises(InputError):

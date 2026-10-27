@@ -1,0 +1,10 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const html=fs.readFileSync(require('path').join(__dirname,'../web_dialogue/index.html'),'utf8');
+const summary=html.match(/function summarizeBatch\([\s\S]*?\n}\n(?=function renderBatchStatus)/)[0];
+const context={Set};vm.createContext(context);vm.runInContext(summary,context);
+const groups=[{id:'a',status:'ready'},{id:'b',status:'ready'},{id:'c',status:'error',error_code:'missing_track'},{id:'d',status:'error'}];
+const result=context.summarizeBatch([{id:'a',status:'done'},{id:'e',status:'error'}],groups,new Set(['a','b']));
+assert.deepStrictEqual(JSON.parse(JSON.stringify(result)),{done:['a'],skipped:['b'],missing:['c'],failed:['e'],invalid:['d']});
+const preflight=html.match(/async function preflightBatch\([\s\S]*?return true;}\n(?=async function generate)/)[0];
+let response,confirmed=[];Object.assign(context,{outputFolder:null,batchGroups:[],batchExcluded:new Set(),alreadyCompleted:()=>false,folderCall:async()=>response,window:{confirm:s=>(confirmed.push(s),true)}});vm.runInContext(preflight,context);
+(async()=>{response={ok:true,free_bytes:null};assert.equal(await context.preflightBatch({folder_id:'x'},1),true);assert(confirmed.pop().includes('无法读取'));response={ok:true,free_bytes:5};await assert.rejects(()=>context.preflightBatch({folder_id:'x'},1),/低于粗略预估/);response={ok:false,error:'无法写入'};await assert.rejects(()=>context.preflightBatch({folder_id:'x'},1),/无法写入/);console.log('PASS: mixed batch summary and output space states');})().catch(e=>{console.error(e);process.exitCode=1});

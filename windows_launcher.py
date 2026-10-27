@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import signal
+import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -16,12 +18,12 @@ from native_windows_updater import NativeUpdaterMixin
 
 class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
     """Only app-owned successful saves may be revealed; JS never supplies a path."""
-    def __init__(self, base):
+    def __init__(self, base, storage=None):
         self._base = base
         self._window = None
         self._saved = {}
         self._lock = threading.Lock()
-        self._setup_folders()
+        self._setup_folders(storage)
 
     def save_download(self, route):
         if getattr(getattr(self,"_update_server",None),"update_in_progress",False): return {"ok":False,"error":"正在准备更新"}
@@ -225,7 +227,8 @@ def run_window(gui_report=None):
     webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER'] = True
     webview.settings['IGNORE_SSL_ERRORS'] = False
     url = f"http://127.0.0.1:{server.server_address[1]}"
-    downloads = NativeDownloads(url)
+    gui_temp = tempfile.TemporaryDirectory(prefix='dialogue-gui-ci-') if gui_report else None
+    downloads = NativeDownloads(url, Path(gui_temp.name) / 'preferences.json' if gui_temp else None)
     window = webview.create_window('对白', url, js_api=downloads, width=1180, height=840, min_size=(760,620), background_color='#F5F7F8')
     downloads._window = window
     downloads._setup_updater(server)
@@ -246,6 +249,34 @@ def run_window(gui_report=None):
         return True
     window.events.closing += closing
     if gui_report:
+        def capture_window(name):
+            # PrintWindow targets this process's titled app window, never a desktop screenshot.
+            script = Path(gui_temp.name) / 'capture.ps1'
+            script.write_text(r'''Add-Type -AssemblyName System.Drawing
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class CaptureWindow {
+ [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
+}
+"@
+$p=Get-Process -Id $args[0]; $h=$p.MainWindowHandle
+if ($h -eq [IntPtr]::Zero) { throw "No app window" }
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public class WindowBounds {
+ [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
+ [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+}
+"@
+$r=New-Object WindowBounds+RECT; if (-not [WindowBounds]::GetWindowRect($h,[ref]$r)) { throw "No bounds" }
+$w=$r.R-$r.L; $height=$r.B-$r.T; if ($w -le 0 -or $height -le 0 -or $w -gt 2400 -or $height -gt 1600) { throw "Invalid bounds" }
+$b=New-Object Drawing.Bitmap $w,$height; $g=[Drawing.Graphics]::FromImage($b); $dc=$g.GetHdc()
+try { if (-not [CaptureWindow]::PrintWindow($h,$dc,2)) { throw "PrintWindow failed" } } finally { $g.ReleaseHdc($dc) }
+$b.Save($args[1],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()
+''', encoding='utf-8')
+            output = Path(gui_report).parent / ('windows-gui-' + name + '.png')
+            subprocess.run(['powershell','-NoProfile','-NonInteractive','-File',str(script),str(os.getpid()),str(output)], check=True, timeout=15, capture_output=True)
+            return output.name
         def inspect_window():
             try:
                 ready = time.monotonic()+10
@@ -259,7 +290,21 @@ def run_window(gui_report=None):
                     state = json.loads(result)
                     if state['rows'] == 5 and state['roles'] == 2:
                         report.update(state)
-                        report['passed']=state['update']
+                        report['screenshots'] = []
+                        window.resize(1280,800)
+                        window.evaluate_js("applyTheme('light')")
+                        report['screenshots'].append(capture_window('light-1280'))
+                        window.resize(1024,700)
+                        window.evaluate_js("applyTheme('dark')")
+                        report['screenshots'].append(capture_window('dark-1024'))
+                        state['theme_restore'] = downloads.set_preferences({'theme':'dark'})['ok'] and NativeDownloads(url, Path(gui_temp.name) / 'preferences.json').get_preferences()['theme'] == 'dark'
+                        state['separate_audio'] = bool(window.evaluate_js("document.getElementById('auditionaudio')!==document.getElementById('audio')"))
+                        state['summary'] = bool(window.evaluate_js("JSON.stringify(summarizeBatch([{id:'one',status:'done'},{id:'two',status:'error'}],[{id:'three',status:'error',error_code:'missing_track'}],new Set()))").find('missing') >= 0)
+                        state['summary_navigation'] = bool(window.evaluate_js("""(()=>{batchGroups=[{id:'g1',status:'ready'},{id:'g2',status:'error',error_code:'missing_track'}];batchSkippedSnapshot=new Set();$('preview').hidden=false;$('preview').innerHTML='<div data-group-id=\"g1\" tabindex=\"-1\"></div><div data-group-id=\"g2\" tabindex=\"-1\">缺轨（虚构）</div>';renderBatchStatus({id:'fixture',items:[{id:'g1',name:'虚构对话',status:'error',error:'模拟失败'}]});[...$('batchsummary').querySelectorAll('button')].find(x=>x.textContent.includes('失败')).click();return document.activeElement.parentElement.id==='batchresults';})()"""))
+                        report['screenshots'].append(capture_window('batch-fixture'))
+                        state['scope_note'] = 'Synthetic fixtures; no live speech or update installation; screenshots require human visual review.'
+                        report.update(state)
+                        report['passed']=all(state[k] for k in ('update','theme_restore','separate_audio','summary','summary_navigation'))
                         break
                     time.sleep(.2)
                 if not report['passed']: report['error']='Native UI did not show the expected example'
@@ -276,6 +321,7 @@ def run_window(gui_report=None):
     finally:
         server.shutdown(); server.server_close(); server.jobs.close()
         if installation_lease: installation_lease.close()
+        if gui_temp: gui_temp.cleanup()
         if gui_report:
             timeout.cancel()
             Path(gui_report).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')

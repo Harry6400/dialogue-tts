@@ -230,7 +230,7 @@ final class FolderState {
         return result
     }
     func preferences() -> [String: Any] {
-        var result: [String: Any] = ["ok": true, "voices": values["voices"] ?? [:], "rate": values["rate"] ?? 1.0, "pause_ms": values["pause_ms"] ?? 250]
+        var result: [String: Any] = ["ok": true, "voices": values["voices"] ?? [:], "rate": values["rate"] ?? 1.0, "pause_ms": values["pause_ms"] ?? 250, "theme": values["theme"] ?? "light"]
         for role in ["input", "output"] {
             if let id = roles[role], let url = urls[id] {
                 var isDirectory: ObjCBool = false
@@ -245,7 +245,10 @@ final class FolderState {
               Set(voices.keys).isSubset(of: ["AGENT", "USER"]), voices.values.allSatisfy({ allowedVoices.contains($0) }),
               let rate = args["rate"] as? Double, rate.isFinite, (0.5...2.0).contains(rate),
               let pause = args["pause_ms"] as? Int, (0...3000).contains(pause) else { return false }
+        let theme = args["theme"] as? String ?? (values["theme"] as? String ?? "light")
+        guard ["light", "dark"].contains(theme) else { return false }
         let before = values
+        values["theme"] = theme
         values["voices"] = voices; values["rate"] = rate; values["pause_ms"] = pause
         do { try persist(); return true } catch { values = before; throw error }
     }
@@ -478,6 +481,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             guard let id = args["folder_id"] as? String, let url = folderState.folder(id, role: "input") else { reply(["ok": false, "error": "文件夹授权无效"]); return }
             do { reply(["ok": true, "folder_id": id, "path": url.path, "files": try readSelectedXMLFolder(url)]) }
             catch { reply(["ok": false, "error": "无法读取文件夹，请检查 XML 数量、大小和权限。 "]) }
+        case "check_output_space":
+            guard let id = args["folder_id"] as? String, let url = folderState.folder(id, role: "output") else { reply(["ok": false, "error": "文件夹授权无效"]); return }
+            let probe = url.appendingPathComponent(".dialogue-check-" + UUID().uuidString)
+            let fd = open(probe.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+            guard fd >= 0 else { reply(["ok": false, "error": "无法写入结果文件夹，请重新选择。"]); return }
+            close(fd); unlink(probe.path)
+            let free = (try? url.resourceValues(forKeys: [.volumeAvailableCapacityKey]).volumeAvailableCapacity).flatMap { $0 }
+            reply(["ok": true, "writable": true, "free_bytes": free.map { $0 as Any } ?? NSNull()])
         case "check_completed":
             guard let id = args["folder_id"] as? String, let url = folderState.folder(id, role: "output"),
                   let fingerprints = args["fingerprints"] as? [String], fingerprints.count <= 50,
