@@ -1,4 +1,4 @@
-# Folder bridge (v0.4 development)
+# Folder bridge (v0.3.4)
 
 The frontend has no filesystem authority. Paths are display text only. Native hosts issue opaque `folder_id` capabilities after the user chooses a directory, or restores the persisted native authorization. Invalid restored permissions must set `valid: false`. Restoring preferences never scans XML or submits synthesis.
 
