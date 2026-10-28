@@ -5,13 +5,14 @@
 ## v0.3.4 正式交付状态
 
 - PR #2 已以 merge commit 合并。GitHub、Gitee 的 v0.3.4 标签均固定至 18cf1c16f5aa9ad4b24126cf625dce70ca3c5555，保留阶段提交。当前正式界面仍为原工作台及既有浅色、深色模式。
-- [GitHub v0.3.4](https://github.com/Harry6400/dialogue-tts/releases/tag/v0.3.4) 已发布五附件，并经匿名完整下载校验大小、SHA-256 全部一致。Gitee 官方发行表单已暂存 Mac 包与摘要；其余三附件和正式提交待本机解锁后完成，尚不能宣称双站交付。
+- [GitHub v0.3.4](https://github.com/Harry6400/dialogue-tts/releases/tag/v0.3.4) 与 [Gitee v0.3.4](https://gitee.com/yongchu-64/dialogue-tts/releases/tag/v0.3.4) 均已正式发布相同五附件：双平台 ZIP、各自 .sha256、SHA256SUMS。两站全部附件均经匿名完整下载校验，大小和 SHA-256 与本机正式包一致；Gitee 显式禁用代理直连，GitHub 经当前系统代理。
 - Mac：0.3.4 / 构建号 8；12,668,273 字节；SHA-256 2297ed0251139ee41ef1dc3e6532d7269067fea42efa1e032bce7b3d9b4ddb7a。
 - Windows：标签 CI 40541250675 第 2 次运行；15,355,284 字节；SHA-256 e3a7c4ae6fda7a940667fe5bf8afe354c6986444e6f63c6b7564d4342ce1ad4e。首次运行的墙钟计时断言失败保留；原断言未调整，重跑通过。
 - 两平台各 132 个导出源码文件与标签逐一一致（Windows CRLF 规范化比较）；Mac 包身份、架构和签名、Windows PE 版本、许可均已核对。五附件已归档，v0.3.3 既有五附件摘要保持原样。
 - 真实 v0.3.3 发行 ZIP → v0.3.4 真实 ZIP 的隔离 Mac 更新通过：旧进程正常退出、替换 complete、原生 ready、设置和旧备份保留、隔离标记保留。首次旧包冷启动超过验收脚本 45 秒；按生产原有 90 秒期限重跑通过，首次失败记录保留。
 - Windows 标签构建的真实合成、原生保存／目录导出、窗口及主题恢复通过；完整更新仍为 requires_system_confirmation、end_to_end_passed=false，仅 ci_gate_passed=true。国内 Windows、旧系统真机验证仍缺失。
-- 下一步仅补齐 Gitee 发行和匿名下载、更新源发现核验，再开始 v0.4.0 布局设计；本轮未做界面改版，未替换用户安装。
+- 生产更新源选择器从 v0.3.3 检查时，Mac、Windows 均发现 Gitee v0.3.4，名称、大小及摘要正确，同版本 GitHub 备用元数据完全一致；v0.3.4 检查为最新版本。此为当前网络验证，不代表所有国内网络可用。
+- v0.3.4 发布验收已完成；下一阶段再设计 v0.4.0 的具体布局。本轮未做界面改版，未替换用户安装。
 
 ## 历史发行 v0.3.3
 
@@ -46,7 +47,7 @@
 - 用户另行批准修复 Mac 页内退出残留：通过主事件循环发起终止，避免主队列中等待异步退出回执；原任务和保存保护保留。真实 RunLoop 重入回归和旧调度反例通过；修复后页内退出已确认 GUI 与后台两个精确 PID 均结束。启动失败等程序发起的退出也使用相同调度。该缺陷在 v0.3.3 同一路径仍存在，已发布附件保持不变。
 - 国内 Windows 真机、Windows 系统确认后的完整更新、macOS 12/Safari 15 与 Edge 109 真机验证仍缺失。
 - 私人截图、音频、下载和本机事务记录只保存在本机 evidence/ 与 verification/，不进入公共仓库或源码导出。
-- 当前授权：补齐最终证据、更新 PR #2 并以 merge commit 合并，从 v0.3.4 标签重新构建和双站发布；本轮不实施或发布 v0.4.0 界面改版。
+- 当前阶段已完成：PR #2 以 merge commit 合并，从 v0.3.4 标签重新构建并完成双站发行和匿名下载核验；本轮未实施或发布 v0.4.0 界面改版。
 
 Windows CI 40534453142 的旧窗口就绪回执读取曾遇到 PermissionError（文件共享锁），该次失败保留。修正后的 fa93bd5 / CI 40535864449 已成功：构建、真实合成、原生保存和窗口通过；完整更新仍为 requires_system_confirmation / end_to_end_passed=false，仅包装门槛通过。Mac、Windows 源码检查 CI 40535870059 / 40535862247 同提交通过。以上是历史候选证据，v0.3.4 正式包将重新构建验收。
 
