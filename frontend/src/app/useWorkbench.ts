@@ -3,7 +3,8 @@ import type {JobSnapshot, SoundSettings} from '../types/contracts';
 import {requestId} from '../services/api';
 import type {Modal} from './AppDialogs';
 import {isWorking, messageOf, type WorkspaceModel} from './useWorkspace';
-type SafetyHost = Window & {dialogueCloseSafety?: () => object; dialogueUpdateSafety?: () => object; dialogueShowUnsaved?: () => void; dialogueUpdateLock?: (value: boolean) => void};
+import {useApplicationUpdate} from './useApplicationUpdate';
+type SafetyHost = Window & {dialogueCloseSafety?: () => object; dialogueUpdateSafety?: () => object; dialogueShowUnsaved?: () => void; dialogueUpdateLock?: (value: boolean) => void; dialogueCheckForUpdates?: () => void};
 const defaultSettings: SoundSettings = {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', USER: 'zh-CN-XiaoyiNeural'}, rate: 1, pause_ms: 250, auto_voice: true, manual_user_voice: false};
 export function useWorkbench(model: WorkspaceModel) {
   const {workspace, config} = model;
@@ -26,11 +27,19 @@ export function useWorkbench(model: WorkspaceModel) {
   const auditionRunning = !!auditionJob && ['queued', 'running'].includes(auditionJob.status);
   const busy = !!model.pending || updateLocked || auditionRunning;
   const running = isWorking(workspace);
+  const updates = useApplicationUpdate(model, busy, running);
   const updateSafetyBusy = !!model.pending && !['准备更新','检查更新'].includes(model.pending);
   const restoredAccess = !!workspace && workspace.input_folder.valid !== false && model.output?.valid !== false;
 
   useEffect(() => {if (model.preferences?.theme) {setTheme(model.preferences.theme); document.documentElement.dataset.theme = model.preferences.theme;}}, [model.preferences?.theme]);
   useEffect(() => {const timer = setTimeout(() => {if (model.query !== search) model.setQuery(search);}, 250); return () => clearTimeout(timer);}, [search, model.query, model.setQuery]);
+
+  useEffect(() => {
+    const host = window as SafetyHost;
+    const previous = host.dialogueCheckForUpdates;
+    host.dialogueCheckForUpdates = () => {setNarrowOpen(false); setModal('settings'); void updates.check();};
+    return () => {host.dialogueCheckForUpdates = previous;};
+  }, [updates.check]);
 
   useEffect(() => {
     const host = window as SafetyHost;
@@ -115,7 +124,7 @@ export function useWorkbench(model: WorkspaceModel) {
   const resumable = !!workspace && ['paused', 'interrupted'].includes(workspace.status);
   const offlineResume = resumable && ['recovery_scan','recovery_settings','recovery_checking'].includes(workspace?.phase || '');
   async function startAudition() {await model.perform('创建试听', async () => {setAuditionJob(await model.api.audition(auditionSettings.current, requestId()));});}
-  return {workspace, config, mode, setMode, section, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, consent, setConsent, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, navigate, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters};
+  return {workspace, config, mode, setMode, section, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, consent, setConsent, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, navigate, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates};
 }
 
 export type WorkbenchUi = ReturnType<typeof useWorkbench>;

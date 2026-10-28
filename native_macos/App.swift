@@ -5,6 +5,22 @@ import Darwin
 import CryptoKit
 import CoreFoundation
 
+let updateMenuCheckScript = """
+(() => {
+    if (typeof window.dialogueCheckForUpdates === 'function') {
+        window.dialogueCheckForUpdates();
+        return 'react';
+    }
+    const button = document.getElementById('checkupdate');
+    if (button && typeof button.click === 'function') {
+        if (button.disabled) return 'busy';
+        button.click();
+        return 'legacy';
+    }
+    return 'unavailable';
+})();
+"""
+
 // terminateLater runs a nested AppKit loop. Starting it inside a main-queue
 // block prevents the later main-queue reply from running until that block exits.
 func scheduleNativeTermination(_ action: @escaping () -> Void) {
@@ -378,6 +394,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let menu = NSMenu()
         let item = NSMenuItem()
         let appMenu = NSMenu()
+        let checkUpdateItem = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdatesFromMenu(_:)), keyEquivalent: "")
+        checkUpdateItem.target = self
+        appMenu.addItem(checkUpdateItem)
+        appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "退出对白", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.submenu = appMenu
         menu.addItem(item)
@@ -451,6 +471,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             self.showStartupError()
             scheduleNativeTermination { NSApp.terminate(nil) }
         }
+    }
+
+    @objc private func checkForUpdatesFromMenu(_ sender: Any?) {
+        guard !closing else { return }
+        guard !updating else { showMenuUpdateStatus("更新正在进行，请等待完成。"); return }
+        guard let page = webView, isWorkbench(page.url), service?.isRunning == true else {
+            showMenuUpdateStatus("工作台还未准备好，请稍后再试。"); return
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        page.evaluateJavaScript(updateMenuCheckScript) { [weak self] result, error in
+            guard let self = self, !self.closing else { return }
+            if error == nil, let route = result as? String {
+                if route == "react" || route == "legacy" { return }
+                if route == "busy" { self.showMenuUpdateStatus("正在检查或安装更新，请等待完成。"); return }
+            }
+            self.showMenuUpdateStatus("工作台还未准备好，请稍后再试。");
+        }
+    }
+
+    private func showMenuUpdateStatus(_ message: String) {
+        let alert = NSAlert(); alert.messageText = "检查更新"; alert.informativeText = message
+        if let window = window { alert.beginSheetModal(for: window) }
+        else { alert.runModal() }
     }
 
     private func showStartupError() {

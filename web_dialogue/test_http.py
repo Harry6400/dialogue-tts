@@ -51,6 +51,18 @@ class HTTPTests(unittest.TestCase):
         self.assertEqual(json.loads(body)['token'], self.s.token)
         self.assertEqual(h['X-Frame-Options'], 'DENY')
 
+    def test_config_reports_shipped_version_offline_and_mac_build_only_on_mac(self):
+        from .updates import CURRENT_VERSION, MAC_BUILD_NUMBER
+        with patch('web_dialogue.updates.check_update') as check:
+            for platform in ('darwin', 'win32', 'linux'):
+                with self.subTest(platform=platform), patch('web_dialogue.app.sys.platform', platform):
+                    status, body, _ = self.request('/api/config')
+                    config = json.loads(body)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(config['app_version'], CURRENT_VERSION)
+                    self.assertEqual(config['mac_build_number'], MAC_BUILD_NUMBER if platform == 'darwin' else None)
+            check.assert_not_called()
+
     def test_preview_no_synthesis(self):
         status, body, _ = self.request('/api/preview', XML_PAYLOAD)
         self.assertEqual(status, 200)

@@ -2,7 +2,7 @@ export type Role = 'AGENT' | 'USER';
 export type VoiceId = 'zh-CN-XiaoxiaoNeural' | 'zh-CN-XiaoyiNeural' | 'zh-CN-YunxiNeural' | 'zh-CN-YunjianNeural' | 'zh-CN-YunxiaNeural' | 'zh-CN-YunyangNeural';
 export interface Voice {id: VoiceId; label: string; locale: 'zh-CN'; gender: 'Female' | 'Male'}
 export interface XmlFile {name: string; content: string}
-export interface Config {token: string; voices: Voice[]; catalog_revision: string; catalog_source: string; xml_example: XmlFile[]; can_shutdown: boolean}
+export interface Config {token: string; voices: Voice[]; catalog_revision: string; catalog_source: string; xml_example: XmlFile[]; can_shutdown: boolean; app_version?: string; mac_build_number?: string | null}
 export interface Line {id: number; speaker: Role; text: string; voice: VoiceId; pause_after_ms: number; speech_rate: number}
 export interface PreviewRow {id: number; speaker: Role; text: string; start_ms?: number; end_ms?: number; muted?: boolean; overlap?: boolean}
 export interface Script {lesson_id: string; title: string; language: string; lines: Line[]; settings: {speech_rate: number; initial_silence_ms: number; default_pause_ms: number}}

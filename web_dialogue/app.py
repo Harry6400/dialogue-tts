@@ -265,7 +265,8 @@ class Handler(BaseHTTPRequestHandler):
             from .updates import check_update
             return self.json(check_update())
         if path == "/api/config":
-            return self.json({"token": self.server.token, "voices": self.server.voice_catalog["voices"], "catalog_revision": self.server.voice_catalog["revision"], "catalog_source": self.server.voice_catalog["source"], "xml_example": XML_EXAMPLE, "can_shutdown": getattr(self.server, "can_shutdown", False)})
+            from .updates import CURRENT_VERSION, MAC_BUILD_NUMBER
+            return self.json({"token": self.server.token, "voices": self.server.voice_catalog["voices"], "catalog_revision": self.server.voice_catalog["revision"], "catalog_source": self.server.voice_catalog["source"], "xml_example": XML_EXAMPLE, "can_shutdown": getattr(self.server, "can_shutdown", False), "app_version": CURRENT_VERSION, "mac_build_number": MAC_BUILD_NUMBER if sys.platform == 'darwin' else None})
         if path == "/api/voices":
             return self.json(self.server.voice_catalog)
         parts = path.strip("/").split("/")

@@ -1,5 +1,5 @@
 import {StrictMode} from 'react';
-import {fireEvent, render, screen, waitFor,within} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor,within} from '@testing-library/react';
 import {afterEach, expect, it, vi} from 'vitest';
 import {App} from '../app/App';
 import type {NativeHost} from '../services/native';
@@ -130,6 +130,24 @@ it('keeps updater safety clear of its own installation request while locking the
   fireEvent.click(await screen.findByRole('button', {name: '下载并安装更新'}));
   await waitFor(() => expect(install).toHaveBeenCalledOnce());
   await waitFor(() => expect(safety).toEqual({busy: false, unsaved: false, saving: false, persistent_workspace: true}));
+});
+
+it('opens application settings from the native menu and uses the same check without installing', async () => {
+  server(null);
+  const check = vi.fn().mockResolvedValue({state: 'latest', current_version: '0.4.0'});
+  const install = vi.fn();
+  (window as NativeHost).pywebview = {api: {check_for_update: check, install_update: install}};
+  render(<App/>);
+  await waitFor(() => expect(screen.getByRole('button', {name: '选择 XML 文件夹'})).toBeEnabled());
+  expect(check).not.toHaveBeenCalled();
+  const host = window as Window & {dialogueCheckForUpdates?: () => void};
+  act(() => host.dialogueCheckForUpdates?.());
+  expect(await screen.findByRole('dialog', {name: '应用设置'})).toBeVisible();
+  expect(await screen.findByText('当前已是最新版本')).toBeVisible();
+  expect(check).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', {name: '检查更新'}));
+  await waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+  expect(install).not.toHaveBeenCalled();
 });
 
 it('clears the visible search and server query together from an empty result',async()=>{
