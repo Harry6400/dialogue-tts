@@ -68,13 +68,14 @@ it('imports only an opaque native grant and never transfers a path or XML body',
   expect(JSON.stringify(backend.calls)).not.toContain('/fictional/private-input');
 });
 
-it('requires selection and new consent, then submits the server selection snapshot once', async () => {
+it('starts from the explicit generate action without a consent checkbox and submits the selection once', async () => {
   const backend = server(); render(<App/>);
   await screen.findByTestId('workspace-ready');
   fireEvent.click(await screen.findByRole('checkbox', {name: '选择 000123.mp3'}));
   await waitFor(() => expect(screen.getByTestId('generate')).toHaveTextContent('生成 1 通'));
-  expect(screen.getByTestId('generate')).toBeDisabled();
-  fireEvent.click(screen.getByTestId('consent'));
+  await waitFor(() => expect(screen.getByTestId('generate')).toBeEnabled());
+  expect(screen.queryByTestId('consent')).not.toBeInTheDocument();
+  expect(backend.calls.some(call => call.path.endsWith('/start'))).toBe(false);
   fireEvent.click(screen.getByTestId('generate'));
   await screen.findByTestId('pause');
   const calls = backend.calls.filter(call => call.path.endsWith('/start'));
@@ -104,9 +105,10 @@ it('restores access before resuming and never resumes automatically after restar
   fireEvent.click(screen.getByRole('button', {name: '恢复访问'}));
   await waitFor(() => expect(restore).toHaveBeenCalledWith('workspace-one'));
   await waitFor(() => expect(screen.queryByRole('button', {name: '恢复访问'})).not.toBeInTheDocument());
-  expect(screen.getByTestId('resume')).toBeDisabled();
+  await waitFor(() => expect(screen.getByTestId('resume')).toBeEnabled());
+  expect(backend.calls.some(call => call.path.endsWith('/resume'))).toBe(false);
   await screen.findAllByText('虚构会议室预约。');
-  fireEvent.click(screen.getByTestId('consent')); fireEvent.click(screen.getByTestId('resume'));
+  fireEvent.click(screen.getByTestId('resume'));
   await screen.findByTestId('pause');
   expect(backend.calls.filter(call => call.path.endsWith('/resume'))).toHaveLength(1);
 });
@@ -170,7 +172,6 @@ it('clears the visible search and server query together from an empty result',as
 it('shows recovery when the server invalidates an output grant previously held locally',async()=>{
   const backend=server(summary({selected:1}));render(<App/>);
   await screen.findByRole('checkbox',{name:'选择 000123.mp3'});
-  fireEvent.click(screen.getByTestId('consent'));
   await waitFor(()=>expect(screen.getByTestId('generate')).toBeEnabled());
   backend.invalidateOutput();
   fireEvent.click(screen.getByRole('button',{name:/需处理/}));
@@ -199,7 +200,7 @@ it('continues an interrupted settings check without claiming online consent',asy
   const backend=server(summary({status:'interrupted',phase:'recovery_settings',has_run_plan:false,can_edit:false}));render(<App/>);
   const button=await screen.findByRole('button',{name:'继续更新设置'});
   await waitFor(()=>expect(button).toBeEnabled());
-  expect(screen.getByTestId('consent')).not.toBeChecked();
+  expect(screen.queryByTestId('consent')).not.toBeInTheDocument();
   fireEvent.click(button);
   await waitFor(()=>expect(backend.calls.find(call=>call.path.endsWith('/resume'))?.body).toEqual({}));
 });
@@ -364,7 +365,7 @@ it('opens whole-batch CSV export from batch actions and waits for the native sav
   expect(backend.calls.find(call => call.path.endsWith('/report'))?.body).toEqual({});
   expect(backend.calls.find(call => call.path.endsWith('/discard'))?.body).toEqual({});
   expect(backend.calls.some(call => /\/(start|resume|retry|audition)$/.test(call.path))).toBe(false);
-  expect(screen.getByTestId('consent')).not.toBeChecked();
+  expect(screen.queryByTestId('consent')).not.toBeInTheDocument();
 });
 
 it('changes only application theme and reverts visual state on a failed preference save', async () => {

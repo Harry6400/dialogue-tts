@@ -65,7 +65,7 @@ function pageControl(name: string) {return within(activeTable().parentElement!.p
 function issuePanel() {return screen.getByRole('region', {name: '问题分类'});}
 function issueControl(name: string) {return within(issuePanel()).getByRole('button', {name});}
 function statusFilter() {return within(screen.getByLabelText('通话状态筛选')).getByRole('button', {name: /^需处理/});}
-function footerControl(name: string) {return within(screen.getByTestId('consent').closest('footer')!).getByRole('button', {name});}
+function footerControl(name: string) {return within(document.querySelector('footer')!).getByRole('button', {name});}
 
 it('uses global reason counts while pages and selection requests retain the chosen issue scope', async () => {
   const backend = server(); render(<App/>);
@@ -77,13 +77,13 @@ it('uses global reason counts while pages and selection requests retain the chos
   await findCall('100099.mp3');
   expect(activeTable().querySelectorAll('tbody tr')).toHaveLength(100);
   expect(document.querySelectorAll('tbody tr').length).toBeLessThanOrEqual(200);
-  expect(screen.getByText('已选 2 通，其中 2 通不在当前筛选')).toBeVisible();
+  expect(screen.getByTitle('其中 2 通不在当前筛选')).toHaveTextContent('已选 2 通 · 筛选外 2');
   fireEvent.click(pageControl('下一页'));
   await findCall('100199.mp3');
   expect(within(panel).getByRole('button', {name: '筛选输入文件，205 通'})).toHaveAttribute('aria-pressed', 'true');
   const pageRequest = backend.calls.filter(call => call.url.pathname === '/api/workspaces/issues-workspace').at(-1)!;
   expect(Object.fromEntries(pageRequest.url.searchParams)).toMatchObject({filter: 'error', issue: 'input', page: '2', limit: '100'});
-  fireEvent.click(screen.getByText('清空选择', {selector: 'button'}));
+  fireEvent.click(screen.getByRole('button', {name: '清空选择'}));
   await waitFor(() => expect(backend.calls.some(call => call.url.pathname.endsWith('/selection'))).toBe(true));
   expect(backend.calls.find(call => call.url.pathname.endsWith('/selection'))?.body).toEqual({mode: 'clear', q: '', filter: 'error', issue: 'input'});
   expect(JSON.stringify(backend.calls.map(call => call.body))).not.toContain('item_ids');
@@ -130,20 +130,21 @@ it('keeps pending audio outside issue categories and retries saving without sour
   const backend = server({status: 'interrupted', has_run_plan: true, can_edit: false, error: 0, issues: {total: 0, pairing: 0, input: 0, changed: 0, conflict: 0, synthesis: 0, save: 0, other: 0}, save_pending: 2, save_error: 0, synthesis_error: 0, input_folder: {folder_id: 'input', path: '/fictional/missing', valid: false}});
   render(<App/>);
   expect(await screen.findByTestId('pending-audio')).toHaveTextContent('2 通完整音频待保存');
-  expect(screen.getByTestId('consent')).not.toBeChecked();
+  expect(screen.queryByTestId('consent')).not.toBeInTheDocument();
   const retry = footerControl('重试保存'); await waitFor(() => expect(retry).toBeEnabled()); fireEvent.click(retry);
   await waitFor(() => expect(backend.calls.some(call => call.url.pathname.endsWith('/retry'))).toBe(true));
   expect(backend.calls.find(call => call.url.pathname.endsWith('/retry'))?.body).toEqual({kind: 'save'});
   expect(backend.calls.some(call => /\/(start|resume|audition)$/.test(call.url.pathname))).toBe(false);
 });
 
-it('uses eligible selected count for generation and preserves explicit consent for synthesis retry', async () => {
+it('uses eligible selected count for generation and retries synthesis only from its explicit action', async () => {
   // A completed frozen plan may contain failed synthesis plus a new ready
   // selection; a never-started ready batch cannot retry a prior plan.
   const backend = server({status: 'done', has_run_plan: true, save_pending: 0, save_error: 0}); render(<App/>); await findCall('000001.mp3');
   expect(screen.getByTestId('generate')).toHaveTextContent('生成 1 通');
   expect(screen.getByText('已选 2 通 · 可生成 1 通')).toBeVisible();
-  expect(footerControl('重试合成')).toBeDisabled();
-  fireEvent.click(screen.getByTestId('consent')); fireEvent.click(footerControl('重试合成'));
+  await waitFor(() => expect(footerControl('重试合成')).toBeEnabled());
+  expect(backend.calls.some(call => call.url.pathname.endsWith('/retry'))).toBe(false);
+  fireEvent.click(footerControl('重试合成'));
   await waitFor(() => expect(backend.calls.find(call => call.url.pathname.endsWith('/retry'))?.body).toEqual({kind: 'synthesis', consent: true}));
 });

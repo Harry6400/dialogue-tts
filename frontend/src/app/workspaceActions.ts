@@ -1,13 +1,13 @@
 import type {Folder, WorkspaceSafety, WorkspaceSummary} from '../types/contracts';
 import {count} from './format';
 
-export interface ActionContext {workspace: WorkspaceSummary; output: Folder | null; consent: boolean; busy: boolean; loading: boolean; safety: WorkspaceSafety | null}
+export interface ActionContext {workspace: WorkspaceSummary; output: Folder | null; busy: boolean; loading: boolean; safety: WorkspaceSafety | null}
 export type PrimaryAction = 'cancel' | 'pause' | 'restore' | 'resume_offline' | 'resume' | 'start';
 const stopped = new Set(['paused', 'interrupted', 'done']);
 const offlineLabels: Record<string, string> = {recovery_scan: '继续扫描', recovery_settings: '继续更新设置', recovery_checking: '继续核验'};
 
 /** Both the footer and controller use this decision, including recovery gates. */
-export function workspaceActions({workspace: w, output, consent, busy, loading, safety}: ActionContext) {
+export function workspaceActions({workspace: w, output, busy, loading, safety}: ActionContext) {
   const running = ['scanning', 'running', 'pausing'].includes(w.status);
   const interrupted = ['paused', 'interrupted'].includes(w.status);
   const offline = interrupted && !!offlineLabels[w.phase] && (w.phase !== 'recovery_scan' || w.has_run_plan === false);
@@ -26,7 +26,7 @@ export function workspaceActions({workspace: w, output, consent, busy, loading, 
   const startStatus = ['ready', 'done'].includes(w.status) || interrupted && w.has_run_plan === false;
   const eligible = w.phase !== 'finished' && !offlineLabels[w.phase] && !cached && startStatus && !!w.ready_selected && !!w.selection_id;
   const enabled = kind === 'cancel' ? !busy : kind === 'pause' ? !busy && w.status !== 'pausing' :
-    idle && (offline ? w.phase === 'recovery_checking' || inputValid : !unverified && restoredAccess && outputValid && consent && (resumable || eligible));
+    idle && (offline ? w.phase === 'recovery_checking' || inputValid : !unverified && restoredAccess && outputValid && (resumable || eligible));
   let help = '';
   if (w.status === 'scanning') help = '扫描完成后可生成';
   else if (w.phase === 'finished') help = '此批次已结束，可新建批次';
@@ -39,10 +39,9 @@ export function workspaceActions({workspace: w, output, consent, busy, loading, 
   else if (cached && !resumable) help = '请先保存已有的完整音频';
   else if (!w.selected && !resumable) help = '勾选需要生成的通话';
   else if (!w.ready_selected && !resumable) help = '所选通话当前均不可生成，请重新选择合格通话';
-  else if (!consent) help = '勾选联网授权后可生成';
   const label = offline ? offlineLabels[w.phase] : resumable ? '继续生成' : `生成 ${count(w.ready_selected)} 通`;
   const canRetry = idle && !unverified && stopped.has(w.status) && w.has_run_plan === true && w.phase !== 'finished';
   return {kind, enabled, label, help, running, resumable, offline, restoredAccess, needsVerification: unverified,
     retrySave: canRetry && outputValid && !!(w.save_error || w.save_pending),
-    retrySynthesis: canRetry && restoredAccess && outputValid && consent && !!w.synthesis_error};
+    retrySynthesis: canRetry && restoredAccess && outputValid && !!w.synthesis_error};
 }

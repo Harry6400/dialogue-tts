@@ -57,7 +57,7 @@ export function ApplicationSettings({model, theme, changeTheme, onPauseExit, onC
       <div className={styles.sectionHeading}><h3 id="application-exit">退出应用</h3></div>
       <div className={styles.row}>
         <span className={styles.rowIcon}><Icon name="exit"/></span>
-        <div className={styles.description}><strong>保存进度并退出</strong><p>下次打开可恢复，继续生成需再次授权</p></div>
+        <div className={styles.description}><strong>保存进度并退出</strong><p>下次打开可恢复任务</p></div>
         <button className={styles.action} disabled={busy} onClick={() => {onClose(); void onPauseExit();}}>保存并退出</button>
       </div>
     </section>}

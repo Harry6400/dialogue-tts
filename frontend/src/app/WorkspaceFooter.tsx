@@ -5,9 +5,9 @@ import type {WorkspaceModel} from './useWorkspace';
 import {workspaceActions} from './workspaceActions';
 import styles from './App.module.css';
 const statusText = {scanning: '正在扫描', ready: '准备就绪', running: '正在生成', pausing: '正在保存进度', paused: '已暂停', interrupted: '上次运行中断', done: '本次已完成', cancelled: '扫描已取消', error: '需要处理'};
-interface Props {model: WorkspaceModel; consent: boolean; setConsent: (value: boolean) => void; busy: boolean; running: boolean; onStart: () => Promise<void>}
-function footerState({model, consent, busy}: Props, workspace: WorkspaceSummary) {
-  const actions = workspaceActions({workspace, output: model.output, consent, busy, loading: model.loading, safety: model.safety});
+interface Props {model: WorkspaceModel; busy: boolean; running: boolean; onStart: () => Promise<void>}
+function footerState({model, busy}: Props, workspace: WorkspaceSummary) {
+  const actions = workspaceActions({workspace, output: model.output, busy, loading: model.loading, safety: model.safety});
   const selectedTitle = `已选 ${count(workspace.selected)} 通` + (workspace.selected !== workspace.ready_selected ? ` · 可生成 ${count(workspace.ready_selected)} 通` : '');
   return {...actions, title: actions.running ? statusText[workspace.status] : actions.resumable ? '进度已保留，可继续' : selectedTitle};
 }
@@ -18,15 +18,15 @@ function PrimaryAction({props, workspace, state}: {props: Props; workspace: Work
   return <button data-testid={state.resumable ? 'resume' : 'generate'} className={styles.primaryButton} disabled={!state.enabled} aria-describedby={state.help ? 'generate-help' : undefined} onClick={() => void onStart()}><Icon name="play"/>{state.label}</button>;
 }
 function RetryActions({props, workspace}: {props: Props; workspace: WorkspaceSummary}) {
-  const {model, setConsent} = props;
+  const {model} = props;
   const state = footerState(props,workspace);
   if (state.running) return null;
-  return <>{!!(workspace.save_error || workspace.save_pending) && <button className={styles.secondaryButton} disabled={!state.retrySave} onClick={() => void model.mutate({kind: 'retry_save', label: '重试保存'}, () => model.api.retryWorkspace(workspace.id, 'save'))}>重试保存</button>}{!!workspace.synthesis_error && <button className={styles.secondaryButton} disabled={!state.retrySynthesis} onClick={() => {void model.mutate({kind: 'retry_synthesis', label: '重试合成失败项'}, () => model.api.retryWorkspace(workspace.id, 'synthesis')); setConsent(false);}}>重试合成</button>}</>;
+  return <>{!!(workspace.save_error || workspace.save_pending) && <button className={styles.secondaryButton} disabled={!state.retrySave} onClick={() => void model.mutate({kind: 'retry_save', label: '重试保存'}, () => model.api.retryWorkspace(workspace.id, 'save'))}>重试保存</button>}{!!workspace.synthesis_error && <button className={styles.secondaryButton} disabled={!state.retrySynthesis} onClick={() => void model.mutate({kind: 'retry_synthesis', label: '重试合成失败项'}, () => model.api.retryWorkspace(workspace.id, 'synthesis'))}>重试合成</button>}</>;
 }
 export function WorkspaceFooter(props: Props) {
-  const {model,consent,setConsent,running} = props;
+  const {model,running} = props;
   const workspace = model.workspace;
   if (!workspace) return null;
   const state = footerState(props,workspace);
-  return <footer className={styles.footer}><div className={styles.footerInfo}><strong>{state.title}</strong>{!running && <label className={styles.consent}><input data-testid="consent" type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)}/>允许将本次文本发送给微软合成语音</label>}{state.help && !running && <span className={styles.disabledReason} id="generate-help">{state.help}</span>}</div><div className={styles.footerActions}><PrimaryAction props={props} workspace={workspace} state={state}/><RetryActions props={props} workspace={workspace}/></div></footer>;
+  return <footer className={styles.footer}><div className={styles.footerInfo}><strong>{state.title}</strong>{state.help && !running && <span className={styles.disabledReason} id="generate-help">{state.help}</span>}</div><div className={styles.footerActions}><RetryActions props={props} workspace={workspace}/><PrimaryAction props={props} workspace={workspace} state={state}/></div></footer>;
 }

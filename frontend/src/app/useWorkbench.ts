@@ -16,7 +16,6 @@ export function useWorkbench(model: WorkspaceModel) {
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [narrowOpen, setNarrowOpen] = useState(false);
   const [modal, setModal] = useState<Modal | null>(null);
-  const [consent, setConsent] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [search, setSearch] = useState('');
   const [previewOpen, setPreviewOpen] = useState(true);
@@ -32,7 +31,7 @@ export function useWorkbench(model: WorkspaceModel) {
   const updates = useApplicationUpdate(model, busy, running);
   const reports = useWorkspaceReport(model);
   const updateSafetyBusy = blocksUpdate(model.pending);
-  const actions = workspace ? workspaceActions({workspace, output: model.output, consent, busy, loading: model.loading, safety: model.safety}) : null;
+  const actions = workspace ? workspaceActions({workspace, output: model.output, busy, loading: model.loading, safety: model.safety}) : null;
   const restoredAccess = actions?.restoredAccess ?? false;
   const needsVerification = actions?.needsVerification ?? false;
 
@@ -120,15 +119,14 @@ export function useWorkbench(model: WorkspaceModel) {
     if (actions.kind === 'restore') return model.restoreAccess();
     if (actions.kind === 'resume' || actions.kind === 'resume_offline') await model.mutate({kind: 'resume', label: actions.label}, () => model.api.resumeWorkspace(workspace.id, actions.offline));
     else if (actions.kind === 'start') await model.mutate({kind: 'start', label: '开始生成'}, () => model.api.startWorkspace(workspace.id, {selection_id: workspace.selection_id!, output_folder_id: model.output!.folder_id, consent: true, request_id: requestId()}));
-    if (!actions.offline) setConsent(false);
   }
   function clearFilters() {setSearch(''); model.setQuery(''); model.setFilter('all');}
-  function resetView() {setConsent(false); setMode('overview'); setSearch('');}
+  function resetView() {setMode('overview'); setSearch('');}
   async function importFolder() {await model.importFolder(); resetView();}
   function review() {setMode('review'); setScope('call');}
   const resumable = actions?.resumable ?? false;
   async function startAudition() {await model.perform({kind: 'audition', label: '创建试听'}, async () => {setAuditionJob(await model.api.audition(auditionSettings.current, requestId()));});}
-  return {workspace, config, mode, setMode, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, consent, setConsent, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, needsVerification, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates, reports};
+  return {workspace, config, mode, setMode, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, needsVerification, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates, reports};
 }
 
 export type WorkbenchUi = ReturnType<typeof useWorkbench>;
