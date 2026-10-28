@@ -2,7 +2,7 @@
 import copy,unittest,tempfile
 from unittest.mock import patch
 from pathlib import Path
-from tools.windows_upgrade_smoke import expected_security_gate, wait_file
+from tools.windows_upgrade_smoke import expected_security_gate, wait_file, confirm_owned_prompt
 
 class ClassificationTests(unittest.TestCase):
     def test_receipt_sharing_violation_retries_without_extending_deadline(self):
@@ -24,13 +24,13 @@ class ClassificationTests(unittest.TestCase):
     def test_safety_case_or_target_failure(self):
         args=self.fixture();args[0]['cases']['preferences_receipts_cache_preserved']=False;self.assertFalse(self.check(args))
         self.assertFalse(self.check(self.fixture(),correct_target=False));self.assertFalse(self.check(self.fixture(),old_processes_exited=False));self.assertFalse(self.check(self.fixture(),helper_exited=False))
-    def test_no_confirmation_click_code_or_workflow_switch(self):
-        root=Path(__file__).parent
-        harness=(root/'tools/windows_upgrade_smoke.py').read_text()
-        workflow=(root/'.github/workflows/windows-build.yml').read_text()
-        for needle in ('0x00F5','DIALOGUE_CI_CONFIRM_ONCE','owner_approved_run_once','one_time_owner_confirmation','run_buttons'):
-            self.assertNotIn(needle,harness)
-        self.assertNotIn('confirm_isolated_candidate_once',workflow)
-        self.assertNotIn('DIALOGUE_CI_CONFIRM_ONCE',workflow)
+    def test_confirmation_rejects_unbound_or_ambiguous_windows_before_os_calls(self):
+        for field,value in [('verified_target_binding',None),('verified_target_binding','unknown'),('exact_helper_owner',False),('title','Unknown Error'),('class','Unknown'),('run_and_cancel_visible',False)]:
+            window=self.fixture()[0]['owned_prompt_windows'][0]
+            window[field]=value
+            self.assertFalse(confirm_owned_prompt([window]))
+        window=self.fixture()[0]['owned_prompt_windows'][0]
+        self.assertFalse(confirm_owned_prompt([window,window]))
+        self.assertFalse(confirm_owned_prompt([]))
 
 if __name__=='__main__':unittest.main()

@@ -124,7 +124,7 @@ def capture_owned_prompts(root, report_path, binding_context=None, *, process_na
 
 def confirm_owned_prompt(windows):
     """Confirm only a hash/path-bound disposable test executable's OS dialog."""
-    eligible=[w for w in windows if w.get('title')=='Open File - Security Warning' and w.get('class')=='#32770' and w.get('exact_helper_owner') is True and w.get('verified_target_binding') and w.get('run_and_cancel_visible') is True]
+    eligible=[w for w in windows if w.get('title')=='Open File - Security Warning' and w.get('class')=='#32770' and w.get('exact_helper_owner') is True and w.get('verified_target_binding') in {'full-control-text','full-accessibility-path','exact-plan-helper-hashes-and-unique-OS-suffix'} and w.get('run_and_cancel_visible') is True]
     if len(eligible)!=1:return False
     user=ctypes.windll.user32
     user.SendMessageW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
@@ -310,7 +310,9 @@ def main(exe, report_path):
             receipt=wait_file(stage/'receipt.json');app_pid=receipt.get('pid')
             report['transaction_state']=result['state'];report['receipt_state']=receipt.get('state')
             report['cases']['replacement_and_real_ready']=result['state']=='complete' and receipt.get('state')=='ready' and sha256(target)==sha256(candidate)
-            if app_pid:close_owned_window(app_pid)
+            if app_pid:
+                report['ready_target_windows']=capture_owned_prompts(root,report_path,None,process_name='DialogueTTS.exe',target_path=target)
+                close_owned_window(app_pid)
             validate_payload(target,test_version,'win32')
             report['test_candidate_version']=test_version
             report['cases']['preferences_receipts_cache_preserved']=all((state/k).read_bytes()==v for k,v in sentinels.items())
