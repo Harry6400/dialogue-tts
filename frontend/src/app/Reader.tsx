@@ -4,6 +4,7 @@ import type {WorkspaceModel} from './useWorkspace';
 import {Icon} from './Icon';
 import {AudioPlayer} from './AudioPlayer';
 import {itemTitle, shortVoiceName, statusLabels, voiceSource} from './format';
+import {guidanceForItem} from './issues';
 import styles from './App.module.css';
 interface Props {model: WorkspaceModel; active: boolean; compact?: boolean; onReview: () => void; onSources: () => void; onMatchHelp: () => void}
 function timestamp(value?: number) {
@@ -23,7 +24,7 @@ function TranscriptLine({row,compact,highlight=false}: {row: PreviewRow; compact
 function ReaderContent({props,current,evidenceId}: {props: Props; current?: WorkspaceItem; evidenceId?: number}) {
   const {model,compact}=props;
   if (model.detailLoading) return <p className={styles.quiet} role="status">正在读取正文…</p>;
-  if (current?.error) return <div className={styles.readerError}><Icon name="warning"/><p>{current.error}</p><span>源文件保持原样。补齐或修正后可重新导入。</span></div>;
+  if (current?.error) return <div className={styles.readerError}><Icon name="warning"/><p>{current.error}</p><span>{guidanceForItem(current)}</span></div>;
   const rows = model.detail?.rows.filter(row => !row.muted) || [];
   if (!rows.length) return <p className={styles.quiet}>{current ? '此通对话暂无可显示正文。' : '点击通话查看正文和声音。'}</p>;
   return <>{(compact ? rows.slice(0,2) : rows).map(row => <TranscriptLine row={row} compact={compact} highlight={row.id===evidenceId} key={row.id}/>)}</>;

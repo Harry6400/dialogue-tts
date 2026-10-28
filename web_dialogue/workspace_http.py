@@ -44,11 +44,15 @@ def get_workspace(handler,path):
     if work is None:
         handler.json({'error':'请使用启用本机工作区的桌面版本。'},404);return True
     parts=path.strip('/').split('/')[2:]
-    query={k:v[-1] for k,v in parse_qs(urlsplit(handler.path).query).items()}
+    parameters=parse_qs(urlsplit(handler.path).query,keep_blank_values=True)
+    query={k:v[-1] for k,v in parameters.items()}
     try:
+        allowed={'q','filter','issue','page','limit','sort'} if len(parts)==1 and parts!=['safety'] else {'q','issue','after_id','limit'} if len(parts)==2 and parts[1]=='next-issue' else {'revision'} if len(parts)==2 and parts[1]=='snapshot' else set()
+        if set(query)-allowed or any(len(values)!=1 for values in parameters.values()):raise InputError('工作区查询参数无效。')
         if parts==['safety']:result=_safety(work)
         elif not parts:result=work.list()
-        elif len(parts)==1:result=work.page(parts[0],q=query.get('q',''),filter=query.get('filter','all'),page=query.get('page',1),limit=query.get('limit',100),sort=query.get('sort','filename'))
+        elif len(parts)==1:result=work.page(parts[0],q=query.get('q',''),filter=query.get('filter','all'),page=query.get('page',1),limit=query.get('limit',100),sort=query.get('sort','filename'),issue=query.get('issue',''))
+        elif len(parts)==2 and parts[1]=='next-issue':result=work.next_issue(parts[0],q=query.get('q',''),issue=query.get('issue',''),after_id=query.get('after_id'),limit=query.get('limit',100))
         elif len(parts)==2 and parts[1]=='snapshot':result=work.snapshot(parts[0],query.get('revision',0))
         elif len(parts)==3 and parts[1]=='items':result=work.detail(parts[0],parts[2])
         elif len(parts)==4 and parts[1]=='items' and parts[3]=='audio':
@@ -56,6 +60,7 @@ def get_workspace(handler,path):
         else:raise KeyError('工作区接口不存在。')
         handler.json(result)
     except KeyError as exc:handler.json({'error':str(exc)},404)
+    except InputError as exc:handler.json({'error':str(exc)},400)
     except (ValueError,OSError):handler.json({'error':'工作区读取失败，请核对输入或目录授权。'},409)
     return True
 

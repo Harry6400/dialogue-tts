@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {ApiClient} from '../services/api';
 import {createNativeBridge, type Outcome} from '../services/native';
-import type {Config, Folder, Preferences, SelectionWrite, WorkspaceDetail, WorkspaceFilter, WorkspaceItem, WorkspaceSafety, WorkspaceSummary} from '../types/contracts';
+import type {Config, Folder, Preferences, SelectionWrite, WorkspaceDetail, WorkspaceFilter, WorkspaceIssue, WorkspaceItem, WorkspaceSafety, WorkspaceSummary} from '../types/contracts';
 
 export const isWorking = (workspace: WorkspaceSummary | null) => !!workspace && ['scanning', 'running', 'pausing'].includes(workspace.status);
 export const canEdit = (workspace: WorkspaceSummary | null) => !!workspace && (workspace.can_edit ?? !['scanning', 'running', 'pausing', 'paused', 'interrupted'].includes(workspace.status));
@@ -18,6 +18,9 @@ export function useWorkspace() {
   const [matchedTotal, setMatchedTotal] = useState(0);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<WorkspaceFilter>('all');
+  const [issue, setIssue] = useState<WorkspaceIssue>('');
+  const [issueNotice, setIssueNotice] = useState('');
+  const [issueFocus, setIssueFocus] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [detail, setDetail] = useState<WorkspaceDetail | null>(null);
@@ -34,6 +37,9 @@ export function useWorkspace() {
   const workspaceRef = useRef(workspace);
   useEffect(() => {workspaceRef.current = workspace;}, [workspace]);
   const workspaceId = workspace?.id;
+  const viewRef = useRef({workspaceId, query, filter, issue});
+  const nextIssueTarget = useRef<{workspaceId: string; query: string; issue: WorkspaceIssue; itemId: string; page: number} | null>(null);
+  useEffect(() => {viewRef.current = {workspaceId, query, filter, issue};}, [workspaceId, query, filter, issue]);
 
   const refresh = useCallback(() => setRevision(value => value + 1), []);
   const accept = useCallback((value: WorkspaceSummary) => {
@@ -77,17 +83,22 @@ export function useWorkspace() {
     async function load() {
       setLoading(true);
       try {
-        const result = await api.getWorkspace(workspaceId!, {q: query, filter, page});
+        const result = await api.getWorkspace(workspaceId!, {q: query, filter, issue, page});
         if (!alive) return;
         accept(result); setItems(result.items); setMatchedTotal(result.matched_total);
         setHiddenSelection(result.selection_hidden_count || 0);
-        setActiveId(current => result.items.some(item => item.id === current) ? current : result.items.find(item => item.status === 'ready')?.id || result.items[0]?.id || null);
+        const target = nextIssueTarget.current;
+        const targetedPage = target && target.workspaceId === workspaceId && target.query === query && target.issue === issue && target.page === page ? target : null;
+        const located = targetedPage && result.items.some(item => item.id === targetedPage.itemId);
+        if (located) {setActiveId(targetedPage.itemId); setIssueFocus(targetedPage.itemId);}
+        else setActiveId(current => result.items.some(item => item.id === current) ? current : result.items.find(item => item.status === 'ready')?.id || result.items[0]?.id || null);
+        if (targetedPage) {nextIssueTarget.current = null; if (!located) setIssueNotice('列表已更新，可继续定位下一问题。');}
       } catch (issue) {if (alive) setError(messageOf(issue));}
       finally {if (alive) setLoading(false);}
     }
     void load();
     return () => {alive = false;};
-  }, [api, workspaceId, query, filter, page, revision, accept]);
+  }, [api, workspaceId, query, filter, issue, page, revision, accept]);
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -104,14 +115,14 @@ export function useWorkspace() {
           const changes = new Map(result.items.map(item => [item.id, item]));
           setItems(current => current.map(item => changes.get(item.id) || item));
         }
-        if (changed && (result.reset || filter !== 'all' || result.status === 'scanning' || result.phase === 'ready')) refresh();
+        if (changed && (result.reset || filter !== 'all' || issue !== '' || result.status === 'scanning' || result.phase === 'ready')) refresh();
         if (changed && previous?.status === 'scanning' && result.status !== 'scanning') setDetailRevision(value => value + 1);
       } catch (issue) {if (alive) setError(messageOf(issue));}
       finally {if (alive) timer = setTimeout(() => void poll(), 1800);}
     }
     timer = setTimeout(() => void poll(), 1800);
     return () => {alive = false; clearTimeout(timer);};
-  }, [api, workspaceId, filter, accept, refresh]);
+  }, [api, workspaceId, filter, issue, accept, refresh]);
 
   useEffect(() => {
     if (!workspaceId || !activeId) {setDetail(null); return;}
@@ -144,7 +155,7 @@ export function useWorkspace() {
       const folder = nativeValue(await native.current.call('choose_workspace_input', {}));
       if (!folder) return;
       const result = await api.importWorkspace(folder.folder_id);
-      setPage(1); setQuery(''); setFilter('all'); setActiveId(null); setDetail(null); accept(result); refresh();
+      setPage(1); setQuery(''); setFilter('all'); setIssue(''); setIssueNotice(''); setIssueFocus(null); nextIssueTarget.current = null; setActiveId(null); setDetail(null); accept(result); refresh();
     });
   }
 
@@ -178,9 +189,9 @@ export function useWorkspace() {
   async function select(selection: SelectionWrite) {
     if (!workspaceId) return;
     await perform('更新选择', async () => {
-      const result = await api.selectWorkspace(workspaceId, {...selection, q: query, filter});
+      const result = await api.selectWorkspace(workspaceId, {...selection, q: query, filter, issue});
       setHiddenSelection(result.hidden_count);
-      setWorkspace(current => current ? {...current, selected: result.count, selection_id: result.selection_id} : current);
+      setWorkspace(current => current ? {...current, selected: result.count, selection_id: result.selection_id, selection_query: result.selection_query} : current);
       refresh();
     });
   }
@@ -189,14 +200,35 @@ export function useWorkspace() {
     await perform(label, async () => {accept(await operation()); refresh(); if (updateDetail) setDetailRevision(value => value + 1);});
   }
 
+  async function nextIssue() {
+    if (!workspaceId || filter !== 'error') return;
+    await perform('定位下一问题', async () => {
+      const result = await api.getNextWorkspaceIssue(workspaceId, {q: query, issue, ...(activeId ? {after_id: activeId} : {})});
+      const current = viewRef.current;
+      if (current.workspaceId !== workspaceId || current.query !== query || current.filter !== 'error' || current.issue !== issue) return;
+      setIssueFocus(null);
+      if (result.item_id) {
+        nextIssueTarget.current = {workspaceId, query, issue, itemId: result.item_id, page: result.page};
+        setPage(result.page); setActiveId(result.item_id);
+        setIssueNotice(result.wrapped ? '已回到当前筛选的第一个问题。' : '');
+      } else {
+        nextIssueTarget.current = null; setItems([]); setMatchedTotal(0); setActiveId(null); setPage(1);
+        setIssueNotice('当前搜索和分类下已没有问题。');
+      }
+      refresh();
+    });
+  }
+
   function chooseWorkspace(value: WorkspaceSummary) {
-    accept(value); setItems([]); setActiveId(null); setDetail(null); setPage(1); setFilter('all'); setQuery('');
+    accept(value); setItems([]); setActiveId(null); setDetail(null); setPage(1); setFilter('all'); setIssue(''); setIssueNotice(''); setIssueFocus(null); nextIssueTarget.current = null; setQuery('');
     setOutput(value.output_folder || null); setError('');
   }
 
-  const changeQuery = useCallback((value: string) => {setQuery(value); setPage(1);}, []);
-  const changeFilter = useCallback((value: WorkspaceFilter) => {setFilter(value); setPage(1);}, []);
-  return {api, native, config, preferences, workspaces, workspace, items, matchedTotal, query, filter, page, activeId, detail, detailLoading, loading, error, pending, safety, hiddenSelection, output: workspace ? workspace.output_folder || null : output, accept, refresh, perform, nativeValue, mutate, importFolder, chooseOutput, restoreAccess, replaceInput, select, chooseWorkspace, setError, setActiveId, setQuery: changeQuery, setFilter: changeFilter, setPage};
+  const changeQuery = useCallback((value: string) => {setQuery(value); setPage(1); setIssueNotice(''); setIssueFocus(null); nextIssueTarget.current = null;}, []);
+  const changeFilter = useCallback((value: WorkspaceFilter) => {setFilter(value); setIssue(''); setPage(1); setIssueNotice(''); setIssueFocus(null); nextIssueTarget.current = null;}, []);
+  const changeIssue = useCallback((value: WorkspaceIssue) => {setFilter('error'); setIssue(value); setPage(1); setIssueNotice(''); setIssueFocus(null); nextIssueTarget.current = null;}, []);
+  const consumeIssueFocus = useCallback(() => setIssueFocus(null), []);
+  return {api, native, config, preferences, workspaces, workspace, items, matchedTotal, query, filter, issue, issueNotice, issueFocus, page, activeId, detail, detailLoading, loading, error, pending, safety, hiddenSelection, output: workspace ? workspace.output_folder || null : output, accept, refresh, perform, nativeValue, mutate, importFolder, chooseOutput, restoreAccess, replaceInput, select, chooseWorkspace, nextIssue, consumeIssueFocus, setError, setActiveId, setQuery: changeQuery, setFilter: changeFilter, setIssue: changeIssue, setPage};
 }
 
 export type WorkspaceModel = ReturnType<typeof useWorkspace>;

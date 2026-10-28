@@ -1,6 +1,7 @@
 import {AppDialogs} from './AppDialogs';
 import {SettingsDrawer} from './Dialog';
 import {Icon} from './Icon';
+import {IssuePanel} from './IssuePanel';
 import {Reader} from './Reader';
 import {SettingsPanel} from './SettingsPanel';
 import {Sidebar} from './Sidebar';
@@ -28,9 +29,10 @@ export function App() {
       {!workspace ? <div className={styles.empty}><Icon name="file"/><h2>{model.loading ? '正在连接本机服务' : '选择来源文件夹'}</h2><p>批量配对 XML、核对声音并生成 MP3。</p><button className={styles.primaryButton} disabled={!config || busy} onClick={() => void importFolder()}><Icon name="folder"/>选择 XML 文件夹</button><span>原始文件保持原样，生成前需明确联网授权。</span></div> : <>
         {workspace.status !== 'scanning' && <span data-testid="workspace-ready" className={styles.srOnly}>批次已载入</span>}
         <WorkspaceSearch model={model} ui={ui}/>
+        <IssuePanel model={model}/>
         <SelectionToolbar model={model} busy={busy}/>
-        <div className={styles.overview} hidden={mode !== 'overview'}><WorkspaceTable model={model} onReview={review} onClearFilters={ui.clearFilters}/>{previewOpen && <Reader model={model} active={mode === 'overview'} compact onReview={review} onSources={() => setModal('sources')} onMatchHelp={() => setModal('match')}/>}<button className={styles.previewToggle} onClick={() => setPreviewOpen(!previewOpen)} aria-expanded={previewOpen}>{previewOpen ? '收起预览' : '显示预览'}<Icon name="chevron"/></button></div>
-        <div className={styles.reviewWorkspace} hidden={mode !== 'review'}><div className={styles.reviewList}><WorkspaceTable model={model} onReview={review} onClearFilters={ui.clearFilters} context="review"/></div><Reader model={model} active={mode === 'review'} onReview={review} onSources={() => setModal('sources')} onMatchHelp={() => setModal('match')}/></div>
+        <div className={styles.overview} hidden={mode !== 'overview'}><WorkspaceTable model={model} active={mode === 'overview'} onReview={review} onClearFilters={ui.clearFilters}/>{previewOpen && <Reader model={model} active={mode === 'overview'} compact onReview={review} onSources={() => setModal('sources')} onMatchHelp={() => setModal('match')}/>}<button className={styles.previewToggle} onClick={() => setPreviewOpen(!previewOpen)} aria-expanded={previewOpen}>{previewOpen ? '收起预览' : '显示预览'}<Icon name="chevron"/></button></div>
+        <div className={styles.reviewWorkspace} hidden={mode !== 'review'}><div className={styles.reviewList}><WorkspaceTable model={model} active={mode === 'review'} onReview={review} onClearFilters={ui.clearFilters} context="review"/></div><Reader model={model} active={mode === 'review'} onReview={review} onSources={() => setModal('sources')} onMatchHelp={() => setModal('match')}/></div>
         <WorkspaceFooter model={model} consent={consent} setConsent={setConsent} busy={busy} running={running} restoredAccess={restoredAccess} onStart={startOrResume}/>
 
       </>}

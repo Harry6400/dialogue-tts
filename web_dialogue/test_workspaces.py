@@ -106,11 +106,43 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(result['status'],'paused')
         self.assertEqual(result['error'],1)
         self.work.close()
+        self.access.close()
+        self.access=NativeWorkspaceAccess(self.state)
         self.work=Workspaces(self.state,self.jobs,self.access,synthesizer=lambda p:self.fail('must not synthesize cached audio'))
-        self.work.restore(ident)
-        self.work.action(ident,'retry',{'kind':'save','consent':True})
+        self.access.restore(self.target['folder_id'])
+        self.assertFalse(self.work.summary(ident)['input_folder']['valid'])
+        self.work.action(ident,'retry',{'kind':'save'})
         self.assertEqual(self.wait(ident)['saved'],1)
         self.assertEqual(self.calls,['001.mp3'])
+
+    def test_save_only_missing_cache_does_not_synthesize_or_run_queued_calls(self):
+        self.pair('001');self.pair('002')
+        ident=self.import_ready()
+        with patch.object(self.access,'save_audio',side_effect=OSError('fictional volume failure')):
+            self.start(ident);self.wait(ident)
+        row=next(item for item in self.work.page(ident)['items'] if item['filename']=='001.mp3')
+        self.work._audio_path(ident,row['id']).unlink()
+        with patch.object(self.work,'_synthesize',side_effect=AssertionError('save-only cannot synthesize')) as synthesize:
+            self.work.action(ident,'retry',{'kind':'save','consent':False})
+            result=self.wait(ident)
+            synthesize.assert_not_called()
+        items={item['filename']:item for item in self.work.page(ident)['items']}
+        self.assertEqual(items['001.mp3']['error_code'],'missing_cache')
+        self.assertEqual(items['002.mp3']['status'],'queued')
+        self.assertEqual(result['status'],'paused')
+        self.assertEqual(self.calls,['001.mp3'])
+        self.assertFalse((self.output/'002.mp3').exists())
+
+    def test_save_retry_rejects_unknown_kinds_and_parameters_without_touching_cache(self):
+        self.pair('001');ident=self.import_ready()
+        with patch.object(self.access,'save_audio',side_effect=OSError('fictional volume failure')):
+            self.start(ident);self.wait(ident)
+        row=self.work.page(ident)['items'][0]
+        cache=self.work._audio_path(ident,row['id']);original=cache.read_bytes()
+        for payload in ({'kind':'unknown'},{'kind':None},{'kind':'save','unexpected':True}):
+            with self.subTest(payload=payload),self.assertRaises(InputError):self.work.action(ident,'retry',payload)
+        self.assertEqual(cache.read_bytes(),original)
+        self.assertEqual(self.work.summary(ident)['status'],'paused')
 
     def test_modified_input_never_sent_and_conflict_never_overwritten(self):
         self.pair('001');self.pair('002')
@@ -470,10 +502,26 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.work.summary(ident)['saved'],0)
         (self.output/'001.mp3').write_bytes(b'modified')
         self.work.restore(ident);self.wait(ident,True)
-        self.assertEqual(self.work.page(ident)['items'][0]['status'],'conflict')
+        restored=self.work.page(ident)
+        self.assertEqual(restored['items'][0]['status'],'conflict')
+        self.assertEqual(restored['items'][0]['error_code'],'output_conflict')
+        self.assertEqual(restored['issues']['conflict'],1)
         self.work.action(ident,'finish',{})
         self.assertEqual(self.work.summary(ident)['total'],0)
         self.assertEqual((self.output/'001.mp3').read_bytes(),b'modified')
+
+    def test_restore_verified_output_clears_prior_issue_code(self):
+        self.pair('001')
+        ident=self.import_ready();self.start(ident);self.wait(ident)
+        with self.work.db() as db:
+            db.execute("UPDATE items SET error_code='output_conflict',error='先前的冲突提示' WHERE wid=?",(ident,))
+        self.work.close()
+        self.work=Workspaces(self.state,self.jobs,self.access,synthesizer=lambda preview:self.fail('restore must not synthesize'))
+        self.work.restore(ident);self.wait(ident,True)
+        restored=self.work.page(ident)
+        self.assertEqual(restored['items'][0]['status'],'saved')
+        self.assertIsNone(restored['items'][0]['error_code'])
+        self.assertEqual(restored['issues']['total'],0)
 
 
 class WorkspaceHTTPTests(unittest.TestCase):

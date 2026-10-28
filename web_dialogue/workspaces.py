@@ -21,14 +21,15 @@ from contextlib import contextmanager, nullcontext
 from .batch_import import _metadata
 from .normalize import InputError, VOICES
 from .output_names import pair_filename, valid_output_name
+from .workspace_issues import ERROR_STATUSES, ERROR_WHERE, issue_counts, issue_where, normalize_issue
 
 DEFAULT_SETTINGS = {'voices': {'AGENT': VOICES[0]['id'], 'USER': VOICES[1]['id']},
                     'rate': 1, 'pause_ms': 250, 'auto_voice': True, 'manual_user_voice': False}
 ACTIVE = {'running', 'pausing'}
 FILTERS = {'all': '1', 'ready': "status='ready'", 'pending': "status='ready'",
            'running': "status IN ('queued','running','saving','save_pending')", 'processing': "status IN ('queued','running','saving','save_pending')",
-           'error': "status IN ('invalid','synthesis_error','save_error','conflict','changed')",
-           'issues': "status IN ('invalid','synthesis_error','save_error','conflict','changed')",
+           'error': ERROR_WHERE,
+           'issues': ERROR_WHERE,
            'saved': "status='saved'", 'selected': 'selected=1'}
 
 
@@ -57,7 +58,7 @@ class Workspaces:
               id TEXT PRIMARY KEY,status TEXT,phase TEXT,revision INTEGER DEFAULT 0,
               discovered INTEGER DEFAULT 0,scanned INTEGER DEFAULT 0,input_id TEXT,
               output_id TEXT,settings TEXT,run_settings TEXT,selection_id TEXT,
-              message TEXT,active_item TEXT,created REAL,input_path TEXT,output_path TEXT);
+              message TEXT,active_item TEXT,created REAL,input_path TEXT,output_path TEXT,selection_query TEXT);
             CREATE TABLE IF NOT EXISTS files(
               wid TEXT,name TEXT,identity TEXT,role TEXT,digest TEXT,error TEXT,
               PRIMARY KEY(wid,name));
@@ -69,6 +70,7 @@ class Workspaces:
               line_count INTEGER DEFAULT 0,fingerprint TEXT,selected INTEGER DEFAULT 0,
               override TEXT,planned INTEGER DEFAULT 0,plan_voice TEXT,revision INTEGER DEFAULT 0,saved_folder_id TEXT,source_name TEXT,audio_hash TEXT,audio_size INTEGER);
             CREATE INDEX IF NOT EXISTS item_workspace ON items(wid,status);
+            CREATE INDEX IF NOT EXISTS item_issues ON items(wid,status,error_code);
             CREATE INDEX IF NOT EXISTS item_filename ON items(wid,filename);
             CREATE INDEX IF NOT EXISTS item_display ON items(wid,(filename IS NULL),filename,id);
             CREATE INDEX IF NOT EXISTS item_revision ON items(wid,revision);
@@ -85,7 +87,7 @@ class Workspaces:
             for column,kind in (('audio_hash','TEXT'),('audio_size','INTEGER')):
                 if column not in item_columns:db.execute('ALTER TABLE items ADD COLUMN '+column+' '+kind)
             workspace_columns={r[1] for r in db.execute('PRAGMA table_info(workspaces)')}
-            for column in ('input_path','output_path'):
+            for column in ('input_path','output_path','selection_query'):
                 if column not in workspace_columns:db.execute('ALTER TABLE workspaces ADD COLUMN '+column+' TEXT')
             db.execute("UPDATE workspaces SET phase=CASE WHEN phase='settings' THEN 'recovery_settings' WHEN phase='checking' THEN 'recovery_checking' WHEN status='scanning' THEN 'recovery_scan' ELSE 'recovery' END,status='interrupted',active_item=NULL,"
                        "message='任务已中断；核对目录后手动继续。' WHERE status IN ('scanning','running','pausing')")
@@ -130,13 +132,15 @@ class Workspaces:
     def summary(self, ident):
         cache_facts=self._reconcile_cache()
         with self.db() as db:
+            db.execute('BEGIN')
             row = self._ws(db, ident)
             counts = dict(db.execute('SELECT status,count(*) FROM items WHERE wid=? GROUP BY status', (ident,)))
-            selected = db.execute('SELECT count(*) FROM items WHERE wid=? AND selected=1', (ident,)).fetchone()[0]
+            issues = issue_counts(db, ident)
+            selected,ready_selected = db.execute("SELECT count(*),count(CASE WHEN status='ready' THEN 1 END) FROM items WHERE wid=? AND selected=1", (ident,)).fetchone()
         result = {k: row[k] for k in ('id','status','phase','revision','discovered','scanned','message','selection_id')}
         result.update(total=sum(counts.values()), ready=counts.get('ready',0), saved=counts.get('saved',0),
-                      error=sum(counts.get(k,0) for k in ('invalid','synthesis_error','save_error','conflict','changed')),
-                      selected=selected, processed=sum(counts.get(k,0) for k in ('saved','synthesis_error','save_error','conflict','changed')),
+                      error=sum(counts.get(k,0) for k in ERROR_STATUSES), issues=issues,
+                      selected=selected, ready_selected=ready_selected, processed=sum(counts.get(k,0) for k in ('saved','synthesis_error','save_error','conflict','changed')),
                       settings=json.loads(row['settings']), input_folder=self._grant(row['input_id'],'input',row['input_path']),
                       output_folder=self._grant(row['output_id'],'output',row['output_path']),
                       active_item=json.loads(row['active_item']) if row['active_item'] else None)
@@ -146,6 +150,7 @@ class Workspaces:
         result['synthesis_error'] = counts.get('synthesis_error',0)
         result['save_pending'] = counts.get('save_pending',0)
         result['counts'] = counts
+        result['selection_query'] = json.loads(row['selection_query']) if row['selection_query'] else {'q':'','filter':'all','issue':''}
         result['has_unsaved_audio'] = cache_facts['by_workspace'].get(ident,0)>0
         result['global_unsaved_audio'] = cache_facts['protected']>0
         result['unsaved_audio_count'] = cache_facts['by_workspace'].get(ident,0)
@@ -378,23 +383,51 @@ class Workspaces:
         result['source_name'] = row['source_name']
         return result
 
-    def _where(self, q='', filter='all'):
+    def _where(self, q='', filter='all', issue=''):
         if not isinstance(q,str) or len(q)>255 or not isinstance(filter,str) or filter not in FILTERS:
             raise InputError('筛选参数无效。')
-        return FILTERS[filter] + " AND instr(coalesce(filename,source_name,''),?)>0", (q,)
+        category, args = issue_where(issue)
+        return FILTERS[filter] + " AND instr(coalesce(filename,source_name,''),?)>0 AND (" + category + ')', (q,*args)
 
-    def page(self, ident, q='', filter='all', page=1, limit=100, sort='filename'):
+    def page(self, ident, q='', filter='all', page=1, limit=100, sort='filename', issue=''):
         page,limit = int(page),int(limit)
         if page < 1 or not 1 <= limit <= 100 or sort != 'filename':
             raise InputError('分页参数无效。')
-        where,args = self._where(q,filter)
+        where,args = self._where(q,filter,issue)
         with self.db() as db:
             self._ws(db,ident)
             total = db.execute('SELECT count(*) FROM items WHERE wid=? AND '+where,(ident,*args)).fetchone()[0]
             rows = db.execute('SELECT * FROM items WHERE wid=? AND '+where+' ORDER BY filename IS NULL,filename,id LIMIT ? OFFSET ?',
                               (ident,*args,limit,(page-1)*limit)).fetchall()
             hidden = db.execute('SELECT count(*) FROM items WHERE wid=? AND selected=1 AND NOT ('+where+')',(ident,*args)).fetchone()[0]
-        return {**self.summary(ident),'items':[self._item(r) for r in rows], 'matched_total':total,'page':page,'page_size':limit,'selection_hidden_count':hidden}
+        return {**self.summary(ident),'items':[self._item(r) for r in rows], 'matched_total':total,'page':page,'page_size':limit,'selection_hidden_count':hidden,'issue':normalize_issue(issue)}
+
+    def next_issue(self, ident, q='', issue='', after_id=None, limit=100):
+        if str(limit) != '100':raise InputError('异常定位每页固定为 100 条。')
+        if after_id is not None and (not isinstance(after_id,str) or not after_id or len(after_id)>128):
+            raise InputError('通话定位参数无效。')
+        where,args = self._where(q,'error',issue)
+        with self.db() as db:
+            db.execute('BEGIN')
+            self._ws(db,ident)
+            after = None
+            if after_id is not None:
+                after=db.execute('SELECT filename,id FROM items WHERE wid=? AND id=?',(ident,after_id)).fetchone()
+                if after is None:raise KeyError('通话不存在。')
+            total=db.execute('SELECT count(*) FROM items WHERE wid=? AND '+where,(ident,*args)).fetchone()[0]
+            target=None
+            if after is not None:
+                seek,values=('filename IS NULL AND id>?',(after['id'],)) if after['filename'] is None else ('(filename IS NULL OR filename>? OR (filename=? AND id>?))',(after['filename'],after['filename'],after['id']))
+                target=db.execute('SELECT id,filename FROM items WHERE wid=? AND '+where+' AND ('+seek+') ORDER BY filename IS NULL,filename,id LIMIT 1',(ident,*args,*values)).fetchone()
+            wrapped=after is not None and target is None and total>0
+            if target is None:
+                target=db.execute('SELECT id,filename FROM items WHERE wid=? AND '+where+' ORDER BY filename IS NULL,filename,id LIMIT 1',(ident,*args)).fetchone()
+            page=1
+            if target is not None:
+                before,values=('(filename IS NOT NULL OR (filename IS NULL AND id<?))',(target['id'],)) if target['filename'] is None else ('filename IS NOT NULL AND (filename<? OR (filename=? AND id<?))',(target['filename'],target['filename'],target['id']))
+                position=db.execute('SELECT count(*) FROM items WHERE wid=? AND '+where+' AND ('+before+')',(ident,*args,*values)).fetchone()[0]
+                page=position//100+1
+        return {'item_id':target['id'] if target is not None else None,'page':page,'page_size':100,'wrapped':wrapped,'matched_total':total,'filter':'error','issue':normalize_issue(issue)}
 
     def detail(self, ident, item_id):
         with self.db() as db:
@@ -413,7 +446,10 @@ class Workspaces:
                 'result_settings_changed': row['status'] in {'saved','save_error'} and row['fingerprint'] != preview['fingerprint']}
 
     def select(self, ident, payload):
-        where,args = self._where(payload.get('q',''),payload.get('filter','all'))
+        if set(payload)-{'q','filter','issue','mode','item_ids','item_id','selected'}:raise InputError('选择参数无效。')
+        q,filter,issue=payload.get('q',''),payload.get('filter','all'),payload.get('issue','')
+        where,args = self._where(q,filter,issue)
+        query={'q':q,'filter':filter,'issue':normalize_issue(issue)}
         with getattr(self.jobs,'lock',nullcontext()),self.lock,self.db() as db:
             ws=self._ws(db,ident)
             if ws['status'] in ACTIVE or ws['status']=='scanning':
@@ -434,14 +470,14 @@ class Workspaces:
                 for item_id in ids:
                     selected=payload.get('selected')
                     if selected is not None and not isinstance(selected,bool): raise InputError('选择状态无效。')
-                    db.execute("UPDATE items SET selected="+('1-selected' if selected is None else '?')+" WHERE wid=? AND id=? AND status='ready'",
-                               ((ident,item_id) if selected is None else (int(selected),ident,item_id)))
+                    db.execute("UPDATE items SET selected="+('1-selected' if selected is None else '?')+" WHERE wid=? AND id=? AND status='ready' AND "+where,
+                               ((ident,item_id,*args) if selected is None else (int(selected),ident,item_id,*args)))
             else: raise InputError('选择操作无效。')
             token=uuid.uuid4().hex
-            self._bump(db,ident,selection_id=token)
+            self._bump(db,ident,selection_id=token,selection_query=json.dumps(query))
             count=db.execute('SELECT count(*) FROM items WHERE wid=? AND selected=1',(ident,)).fetchone()[0]
             visible=db.execute('SELECT count(*) FROM items WHERE wid=? AND selected=1 AND '+where,(ident,*args)).fetchone()[0]
-        return {'selection_id':token,'count':count,'hidden_count':count-visible}
+        return {'selection_id':token,'count':count,'hidden_count':count-visible,'selection_query':query}
 
     def settings(self,ident,payload):
         from .app import normalize_source
@@ -723,6 +759,10 @@ class Workspaces:
             elif action=='pause':
                 if ws['status']=='running': self._bump(db,ident,status='pausing',phase='pausing')
             elif action in {'resume','retry'}:
+                if set(payload)-({'consent','kind'} if action=='retry' else {'consent'}):raise InputError('继续或重试参数无效。')
+                kind=payload.get('kind') if action=='retry' else None
+                if action=='retry' and kind not in ('synthesis','save'):raise InputError('重试类型无效。')
+                save_only=action=='retry' and kind=='save'
                 if ws['status'] not in {'paused','interrupted','done'} or self.active: raise InputError('任务尚未停止。')
                 self._available()
                 if action=='resume' and ws['phase']=='recovery_settings':
@@ -733,7 +773,7 @@ class Workspaces:
                     thread=self.threads[ident]=threading.Thread(target=self._refresh_metadata,args=(ident,None,False,cancel),daemon=True)
                     thread.start()
                     return self.summary(ident)
-                if not ws['run_settings'] and ws['phase']=='recovery_scan':
+                if action=='resume' and not ws['run_settings'] and ws['phase']=='recovery_scan':
                     self.access.directory(ws['input_id'],'input')
                     db.execute('DELETE FROM files WHERE wid=?',(ident,));db.execute('DELETE FROM items WHERE wid=?',(ident,))
                     self._bump(db,ident,status='scanning',phase='enumerating',discovered=0,scanned=0,message=None)
@@ -742,15 +782,13 @@ class Workspaces:
                     thread=self.threads[ident]=threading.Thread(target=self._scan,args=(ident,cancel),daemon=True)
                     thread.start()
                     return self.summary(ident)
-                if payload.get('consent') is not True: raise InputError('继续合成前请确认联网授权。')
+                if not save_only and payload.get('consent') is not True: raise InputError('继续合成前请确认联网授权。')
                 if not ws['run_settings']: raise InputError('此任务尚未启动，请选择通话后生成。')
                 if db.execute("SELECT 1 FROM items WHERE wid=? AND status='unverified' LIMIT 1",(ident,)).fetchone():
                     raise InputError('请先恢复目录，完成已有结果核验。')
-                if not (action=='retry' and payload.get('kind')=='save'):self.access.directory(ws['input_id'],'input')
+                if not save_only:self.access.directory(ws['input_id'],'input')
                 self.access.directory(ws['output_id'],'output')
                 if action=='retry':
-                    kind=payload.get('kind')
-                    if kind not in ('synthesis','save'): raise InputError('重试类型无效。')
                     if kind=='synthesis':
                         db.execute("UPDATE items SET status='queued',error=NULL,error_code='retry_synthesis' WHERE wid=? AND planned=1 AND status='synthesis_error'",(ident,))
                 self._bump(db,ident,status='running',phase='generating',message=None)
@@ -830,7 +868,8 @@ class Workspaces:
                     except (ValueError,OSError):
                         continue
                     state='saved' if receipt['state']=='saved' else ('conflict' if receipt['state']=='conflict' else ('queued' if row['planned'] else 'ready'))
-                    db.execute('UPDATE items SET status=?,error=? WHERE id=?',(state,None if state=='saved' else '先前输出已变化或缺失。',row['id']))
+                    db.execute('UPDATE items SET status=?,error=?,error_code=? WHERE id=?',
+                               (state,None if state=='saved' else '先前输出已变化或缺失。','output_conflict' if state=='conflict' else None,row['id']))
                     if index%100==0:
                         self._bump(db,ident,phase='checking');db.commit()
                 pending=db.execute("SELECT 1 FROM items WHERE wid=? AND status='unverified' LIMIT 1",(ident,)).fetchone()

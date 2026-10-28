@@ -7,7 +7,7 @@ import type {WorkspaceItem, WorkspaceSummary} from '../types/contracts';
 
 const settings = {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', USER: 'zh-CN-XiaoyiNeural'}, rate: 1, pause_ms: 250, auto_voice: true, manual_user_voice: false} as const;
 const item: WorkspaceItem = {id: 'item-one', filename: '000123.mp3', status: 'ready', selected: false, customer_voice: 'zh-CN-XiaoyiNeural', voice_source: '称呼未判定'};
-function summary(patch: Partial<WorkspaceSummary> = {}): WorkspaceSummary {return {id: 'workspace-one', status: 'ready', phase: 'ready', revision: 1, discovered: 120000, scanned: 120000, total: 60000, ready: 60000, error: 0, saved: 0, selected: 0, processed: 0, input_folder: {folder_id: 'input-grant', path: '/fictional/input', valid: true}, output_folder: {folder_id: 'output-grant', path: '/fictional/output', valid: true}, settings, selection_id: 'selection-one', can_edit: true, has_run_plan: false, ...patch};}
+function summary(patch: Partial<WorkspaceSummary> = {}): WorkspaceSummary {return {id: 'workspace-one', status: 'ready', phase: 'ready', revision: 1, discovered: 120000, scanned: 120000, total: 60000, ready: 60000, error: 0, issues: {total: 0, pairing: 0, input: 0, changed: 0, conflict: 0, synthesis: 0, save: 0, other: 0}, save_pending: 0, saved: 0, selected: 0, ready_selected: patch.selected ?? 0, selection_query: {q: '', filter: 'all', issue: ''}, processed: 0, input_folder: {folder_id: 'input-grant', path: '/fictional/input', valid: true}, output_folder: {folder_id: 'output-grant', path: '/fictional/output', valid: true}, settings, selection_id: 'selection-one', can_edit: true, has_run_plan: false, ...patch};}
 
 function server(initial: WorkspaceSummary | null = summary(), matchEvidence=false, initialItem: Partial<WorkspaceItem> = {}) {
   let workspace = initial;
@@ -25,13 +25,13 @@ function server(initial: WorkspaceSummary | null = summary(), matchEvidence=fals
     else if (url === '/api/workspaces') data = {workspaces: workspace ? [workspace] : []};
     else if (url === '/api/workspaces/import') {workspace = summary(); data = workspace;}
     else if (url.includes('/items/')) data = {filename: '000123.mp3', item: currentItem, workspace_id: workspace?.id, rows: [{id: 0, speaker: 'AGENT', text: matchEvidence?'先生，您好。':'虚构会议室预约。', start_ms: 0}, {id: 1, speaker: 'USER', text: '请预留一小时。', start_ms: 500}, {id: 2, speaker: 'USER', text: '禁止显示的静音内容', muted: true}], warnings: [], sources: [{name: '0001231.xml', role: 'AGENT', segments: 1}, {name: '0001230.xml', role: 'USER', segments: 2}], voice_choice: {user: matchEvidence?'zh-CN-YunxiNeural':'zh-CN-XiaoyiNeural', reason: matchEvidence?'称呼：先生':'称呼未判定',address:matchEvidence?'male':'undetermined',...(matchEvidence?{evidence_row_id:0}:{})}, muted_count: 1};
-    else if (url.endsWith('/selection')) {const selected = body?.mode === 'clear' ? false : body?.selected !== false; currentItem = {...currentItem, selected}; workspace = {...workspace!, selected: selected ? body?.mode === 'all' ? 60000 : 1 : 0, selection_id: 'selection-two'}; data = {selection_id: 'selection-two', count: workspace.selected, hidden_count: 0};}
+    else if (url.endsWith('/selection')) {const selected = body?.mode === 'clear' ? false : body?.selected !== false; const count = selected ? body?.mode === 'all' ? 60000 : 1 : 0; currentItem = {...currentItem, selected}; workspace = {...workspace!, selected: count, ready_selected: count, selection_id: 'selection-two'}; data = {selection_id: 'selection-two', count, hidden_count: 0, selection_query: {q: body?.q || '', filter: body?.filter || 'all', issue: body?.issue || ''}};}
     else if (url.endsWith('/start') || url.endsWith('/resume')) {workspace = {...workspace!, status: 'running', can_edit: false, has_run_plan: true}; data = workspace;}
     else if (url.endsWith('/settings')) {
       if (body && 'customer_voice' in body) currentItem = {...currentItem, customer_voice: body.customer_voice as WorkspaceItem['customer_voice'] || 'zh-CN-XiaoyiNeural', voice_source: body.customer_voice ? '手动选择' : '称呼未判定'};
       workspace = {...workspace!, revision: workspace!.revision + 1}; data = workspace;
     }
-    else if (url.endsWith('/snapshot')) data = {...workspace, items: [], reset: false};
+    else if (url.includes('/snapshot?')) data = {...workspace, items: [], reset: false};
     else data = {...workspace, items: url.includes('q=notfound')?[]:[currentItem], matched_total: url.includes('q=notfound')?0:60000, page: 1, page_size: 100, selection_hidden_count: 0};
     return new Response(JSON.stringify(data), {headers: {'Content-Type': 'application/json'}});
   });
@@ -87,7 +87,7 @@ it('selects the full filter without shipping sixty thousand IDs', async () => {
   await screen.findByRole('button', {name: '选择筛选中全部通话'});
   fireEvent.click(screen.getByRole('button', {name: '选择筛选中全部通话'}));
   await waitFor(() => expect(screen.getByTestId('generate')).toHaveTextContent('生成 60,000 通'));
-  expect(backend.calls.filter(call => call.path.endsWith('/selection')).at(-1)?.body).toEqual({mode: 'all', q: '', filter: 'all'});
+  expect(backend.calls.filter(call => call.path.endsWith('/selection')).at(-1)?.body).toEqual({mode: 'all', q: '', filter: 'all', issue: ''});
 });
 
 it('restores access before resuming and never resumes automatically after restart', async () => {

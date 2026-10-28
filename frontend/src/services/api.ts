@@ -1,4 +1,4 @@
-import type {BatchPayload, BatchPreview, BatchSnapshot, Config, JobSnapshot, PairPayload, Preview, SelectionResult, SelectionWrite, SoundSettings, VoiceId, WorkspaceDetail, WorkspacePage, WorkspaceQuery, WorkspaceSafety, WorkspaceSnapshot, WorkspaceSummary} from '../types/contracts';
+import type {BatchPayload, BatchPreview, BatchSnapshot, Config, JobSnapshot, NextIssue, PairPayload, Preview, SelectionResult, SelectionWrite, SoundSettings, VoiceId, WorkspaceDetail, WorkspaceIssue, WorkspacePage, WorkspaceQuery, WorkspaceSafety, WorkspaceSnapshot, WorkspaceSummary} from '../types/contracts';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number | null, readonly outcome: 'failed' | 'unknown' = 'failed') {super(message);}
@@ -52,17 +52,22 @@ export class ApiClient {
   getWorkspaceSafety() {return this.request<WorkspaceSafety>('/api/workspaces/safety');}
   importWorkspace(inputFolderId: string) {return this.request<WorkspaceSummary>('/api/workspaces/import', {input_folder_id: inputFolderId});}
   getWorkspace(id: string, query: WorkspaceQuery) {
-    const params = new URLSearchParams({q: query.q, filter: query.filter, page: String(query.page), limit: String(query.limit || 100), sort: 'filename'});
+    const params = new URLSearchParams({q: query.q, filter: query.filter, issue: query.issue || '', page: String(query.page), limit: String(query.limit || 100), sort: 'filename'});
     return this.request<WorkspacePage>(this.workspacePath(id) + '?' + params);
   }
   getWorkspaceDetail(id: string, itemId: string) {return this.request<WorkspaceDetail>(this.workspacePath(id) + '/items/' + this.id(itemId));}
+  getNextWorkspaceIssue(id: string, query: {q: string; issue: WorkspaceIssue; after_id?: string}) {
+    const params = new URLSearchParams({q: query.q, issue: query.issue, limit: '100'});
+    if (query.after_id) params.set('after_id', query.after_id);
+    return this.request<NextIssue>(this.workspacePath(id) + '/next-issue?' + params);
+  }
   getWorkspaceSnapshot(id: string, revision: number) {return this.request<WorkspaceSnapshot>(this.workspacePath(id) + '/snapshot?revision=' + revision);}
   selectWorkspace(id: string, selection: SelectionWrite) {return this.request<SelectionResult>(this.workspacePath(id) + '/selection', selection);}
   setWorkspaceSettings(id: string, body: {settings?: SoundSettings; selection_id?: string; item_id?: string; customer_voice?: VoiceId | null}) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/settings', body);}
   startWorkspace(id: string, body: {selection_id: string; output_folder_id: string; consent: true; request_id: string}) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/start', body);}
   pauseWorkspace(id: string) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/pause', {});}
   resumeWorkspace(id: string, offline = false) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/resume', offline ? {} : {consent: true});}
-  retryWorkspace(id: string, kind: 'synthesis' | 'save') {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/retry', {kind, consent: true});}
+  retryWorkspace(id: string, kind: 'synthesis' | 'save') {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/retry', kind === 'save' ? {kind} : {kind, consent: true});}
   cancelWorkspaceScan(id: string) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/cancel-scan', {});}
   finishWorkspace(id: string, discardUnsaved = false) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/finish', {discard_unsaved: discardUnsaved});}
   setWorkspaceFolders(id: string, folders: {input_folder_id?: string; output_folder_id?: string}) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/folders', folders);}

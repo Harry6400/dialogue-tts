@@ -9,15 +9,17 @@ function footerState({model, consent, busy, running, restoredAccess}: Props, wor
   const resumable = ['paused', 'interrupted'].includes(workspace.status);
   const scanResume = resumable && ['recovery_scan','recovery_settings','recovery_checking'].includes(workspace.phase);
   const offlineAction = ({recovery_scan:'继续扫描',recovery_settings:'继续更新设置',recovery_checking:'继续核验'} as Record<string,string>)[workspace.phase];
-  const canStart = !busy && !running && !model.safety?.busy && (scanResume || consent && !!model.output) && (restoredAccess || workspace.phase==='recovery_checking') && (resumable || !!workspace.selected && !!workspace.selection_id);
+  const canStart = !busy && !running && !model.loading && !model.safety?.busy && (scanResume || consent && !!model.output) && (restoredAccess || workspace.phase==='recovery_checking') && (resumable || !!workspace.ready_selected && !!workspace.selection_id);
   let help = '';
   if (workspace.status === 'scanning') help = '扫描完成后可生成';
   else if (!restoredAccess) help = '请先恢复目录访问权限';
   else if (scanResume) help = '离线检查不会发送正文';
   else if (!model.output) help = '请选择结果文件夹';
   else if (!workspace.selected && !resumable) help = '勾选需要生成的通话';
+  else if (!workspace.ready_selected && !resumable) help = '所选通话当前均不可生成，请重新选择合格通话';
   else if (!consent) help = '勾选联网授权后可生成';
-  return {resumable, scanResume, canStart, help, title: running ? statusText[workspace.status] : resumable ? '进度已保留，可继续生成' : `已选 ${count(workspace.selected)} 通`, action: scanResume ? offlineAction : resumable ? '继续生成' : `生成 ${count(workspace.selected)} 通`};
+  const selectedTitle = `已选 ${count(workspace.selected)} 通` + (workspace.selected !== workspace.ready_selected ? ` · 可生成 ${count(workspace.ready_selected)} 通` : '');
+  return {resumable, scanResume, canStart, help, title: running ? statusText[workspace.status] : resumable ? '进度已保留，可继续生成' : selectedTitle, action: scanResume ? offlineAction : resumable ? '继续生成' : `生成 ${count(workspace.ready_selected)} 通`};
 }
 function PrimaryAction({props, workspace, state}: {props: Props; workspace: WorkspaceSummary; state: ReturnType<typeof footerState>}) {
   const {model,busy,onStart} = props;
@@ -28,7 +30,7 @@ function PrimaryAction({props, workspace, state}: {props: Props; workspace: Work
 function RetryActions({props, workspace}: {props: Props; workspace: WorkspaceSummary}) {
   const {model, busy, restoredAccess, running, consent, setConsent} = props;
   if (running) return null;
-  return <>{!!(workspace.save_error || workspace.counts?.save_pending) && <button className={styles.secondaryButton} disabled={busy || !restoredAccess} onClick={() => void model.mutate('重试保存', () => model.api.retryWorkspace(workspace.id, 'save'))}>重试保存</button>}{!!workspace.synthesis_error && <button className={styles.secondaryButton} disabled={busy || !restoredAccess || !consent} onClick={() => {void model.mutate('重试合成失败项', () => model.api.retryWorkspace(workspace.id, 'synthesis')); setConsent(false);}}>重试合成</button>}</>;
+  return <>{!!(workspace.save_error || workspace.save_pending) && <button className={styles.secondaryButton} disabled={busy || !model.output || model.output.valid === false} onClick={() => void model.mutate('重试保存', () => model.api.retryWorkspace(workspace.id, 'save'))}>重试保存</button>}{!!workspace.synthesis_error && <button className={styles.secondaryButton} disabled={busy || !restoredAccess || !consent} onClick={() => {void model.mutate('重试合成失败项', () => model.api.retryWorkspace(workspace.id, 'synthesis')); setConsent(false);}}>重试合成</button>}</>;
 }
 export function WorkspaceFooter(props: Props) {
   const {model,consent,setConsent,running} = props;

@@ -4,7 +4,7 @@ import {TaskSwitcher} from '../app/TaskSwitcher';
 import type {WorkspaceSummary} from '../types/contracts';
 
 function workspace(id: string, name: string, status: WorkspaceSummary['status'], total: number): WorkspaceSummary {
-  return {id, status, phase: status, revision: 1, discovered: total * 2, scanned: total * 2, total, ready: total, error: 0, saved: 0, selected: 0, processed: 0, input_folder: {folder_id: id + '-input', path: '/fictional/' + name, valid: true}, settings: {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', USER: 'zh-CN-XiaoyiNeural'}, rate: 1, pause_ms: 250, auto_voice: true, manual_user_voice: false}};
+  return {id, status, phase: status, revision: 1, discovered: total * 2, scanned: total * 2, total, ready: total, error: 0, issues: {total: 0, pairing: 0, input: 0, changed: 0, conflict: 0, synthesis: 0, save: 0, other: 0}, save_pending: 0, saved: 0, selected: 0, ready_selected: 0, selection_query: {q: '', filter: 'all', issue: ''}, processed: 0, input_folder: {folder_id: id + '-input', path: '/fictional/' + name, valid: true}, settings: {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', USER: 'zh-CN-XiaoyiNeural'}, rate: 1, pause_ms: 250, auto_voice: true, manual_user_voice: false}};
 }
 
 it('opens a readable batch menu and restores focus after selecting another batch', async () => {

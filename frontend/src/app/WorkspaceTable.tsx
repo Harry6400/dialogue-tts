@@ -19,13 +19,21 @@ function EmptyList({model,onClearFilters}: {model:WorkspaceModel;onClearFilters:
   return <div className={styles.listEmpty}><Icon name={model.loading?'refresh':'search'}/><p>{copy.message}</p>{copy.hint&&<span className={styles.emptyHint}>{copy.hint}</span>}{copy.clear&&<button className={styles.textButton} onClick={onClearFilters}>清除筛选</button>}</div>;
 }
 
-export function WorkspaceTable({model, onReview, context = 'overview', onClearFilters}: {model: WorkspaceModel; onReview: () => void; context?: string; onClearFilters: () => void}) {
+export function WorkspaceTable({model, onReview, context = 'overview', active = true, onClearFilters}: {model: WorkspaceModel; onReview: () => void; context?: string; active?: boolean; onClearFilters: () => void}) {
   const {items, workspace, pending, activeId, matchedTotal, page} = model;
   const checkbox = useRef<HTMLInputElement>(null);
   const eligible = items.filter(selectable);
   const checked = eligible.filter(item => item.selected).length;
   const allChecked = eligible.length > 0 && checked === eligible.length;
   useEffect(() => {if (checkbox.current) checkbox.current.indeterminate = checked > 0 && !allChecked;}, [checked, allChecked]);
+  const {issueFocus, consumeIssueFocus} = model;
+  useEffect(() => {
+    if (!active || !issueFocus) return;
+    const target = document.getElementById(context + '-call-' + issueFocus);
+    if (!target) return;
+    target.focus({preventScroll: true}); target.scrollIntoView({block: 'nearest', behavior: 'auto'});
+    consumeIssueFocus();
+  }, [active, issueFocus, context, consumeIssueFocus]);
   const voices = new Map(model.config?.voices.map(voice => [voice.id, voice.label]));
   const pages = Math.max(1, Math.ceil(matchedTotal / 100));
   function move(index: number, direction: number) {

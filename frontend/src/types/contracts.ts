@@ -26,12 +26,17 @@ export interface PreferenceWrite extends SoundSettings {theme: 'light' | 'dark'}
 export type WorkspaceStatus = 'scanning' | 'ready' | 'running' | 'pausing' | 'paused' | 'interrupted' | 'done' | 'cancelled' | 'error';
 export type ItemStatus = 'ready' | 'invalid' | 'queued' | 'running' | 'saving' | 'save_pending' | 'saved' | 'synthesis_error' | 'save_error' | 'conflict' | 'changed' | 'unverified';
 export type WorkspaceFilter = 'all' | 'ready' | 'running' | 'error' | 'saved' | 'selected';
+export type IssueCategory = 'pairing' | 'input' | 'changed' | 'conflict' | 'synthesis' | 'save' | 'other';
+export type WorkspaceIssue = '' | IssueCategory;
+export type WorkspaceIssues = Record<IssueCategory | 'total', number>;
+export interface SelectionQuery {q: string; filter: WorkspaceFilter; issue: WorkspaceIssue}
 export interface WorkspaceItem {id: string; filename?: string; source_name?: string; status: ItemStatus; error?: string; error_code?: string; customer_voice?: VoiceId; voice_source?: string; selected: boolean; line_count?: number; has_audio?: boolean}
-export interface WorkspaceSummary {id: string; status: WorkspaceStatus; phase: string; revision: number; discovered: number; scanned: number; total: number; ready: number; error: number; saved: number; selected: number; processed: number; input_folder: Folder; output_folder?: Folder | null; settings: SoundSettings; active_item?: WorkspaceItem | null; message?: string; selection_id?: string; selection_hidden_count?: number; can_edit?: boolean; has_run_plan?: boolean; save_error?: number; synthesis_error?: number; has_unsaved_audio?: boolean; counts?: Partial<Record<ItemStatus, number>>}
-export interface WorkspacePage extends WorkspaceSummary {items: WorkspaceItem[]; matched_total: number; page: number; page_size: number}
+export interface WorkspaceSummary {id: string; status: WorkspaceStatus; phase: string; revision: number; discovered: number; scanned: number; total: number; ready: number; error: number; issues: WorkspaceIssues; saved: number; selected: number; ready_selected: number; selection_query: SelectionQuery; processed: number; input_folder: Folder; output_folder?: Folder | null; settings: SoundSettings; active_item?: WorkspaceItem | null; message?: string; selection_id?: string; selection_hidden_count?: number; can_edit?: boolean; has_run_plan?: boolean; save_error?: number; save_pending: number; synthesis_error?: number; has_unsaved_audio?: boolean; counts?: Partial<Record<ItemStatus, number>>}
+export interface WorkspacePage extends WorkspaceSummary {items: WorkspaceItem[]; matched_total: number; page: number; page_size: number; issue: WorkspaceIssue}
 export interface WorkspaceSnapshot extends WorkspaceSummary {items: WorkspaceItem[]; reset: boolean}
 export interface WorkspaceSafety {busy: boolean; unsaved: boolean; saving: boolean; pending: boolean}
 export interface WorkspaceDetail extends Preview {item: WorkspaceItem; workspace_id: string; result_settings_changed?: boolean}
-export interface WorkspaceQuery {q: string; filter: WorkspaceFilter; page: number; limit?: number}
-export interface SelectionResult {selection_id: string; count: number; hidden_count: number}
-export interface SelectionWrite {mode: 'page' | 'all' | 'clear' | 'toggle'; q?: string; filter?: WorkspaceFilter; item_ids?: string[]; item_id?: string; selected?: boolean}
+export interface WorkspaceQuery {q: string; filter: WorkspaceFilter; issue?: WorkspaceIssue; page: number; limit?: number}
+export interface NextIssue {item_id: string | null; page: number; page_size: 100; wrapped: boolean; matched_total: number; filter: 'error'; issue: WorkspaceIssue}
+export interface SelectionResult {selection_id: string; count: number; hidden_count: number; selection_query: SelectionQuery}
+export interface SelectionWrite {mode: 'page' | 'all' | 'clear' | 'toggle'; q?: string; filter?: WorkspaceFilter; issue?: WorkspaceIssue; item_ids?: string[]; item_id?: string; selected?: boolean}
