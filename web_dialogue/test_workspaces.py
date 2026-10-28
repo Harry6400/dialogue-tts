@@ -1,5 +1,6 @@
 """Offline, real-filesystem workspace behavior and native trust boundaries."""
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -62,7 +63,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_global_pairing_paging_and_private_metadata(self):
         for i in range(120):self.pair(f'{i:06d}')
-        (self.input/'missing0.xml').write_text(xml('AGENT',ref='fictional-missing'))
+        (self.input/'missing0.xml').write_text(xml('AGENT',ref='fictional-missing'),encoding='utf-8')
         ident=self.import_ready()
         result=self.work.page(ident,limit=100)
         self.assertEqual(result['total'],121)
@@ -147,7 +148,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_modified_input_never_sent_and_conflict_never_overwritten(self):
         self.pair('001');self.pair('002')
         ident=self.import_ready()
-        (self.input/'0010.xml').write_text(xml('AGENT',ref='fictional-001',text='changed after scan'))
+        (self.input/'0010.xml').write_text(xml('AGENT',ref='fictional-001',text='changed after scan'),encoding='utf-8')
         (self.output/'002.mp3').write_bytes(b'old file')
         self.start(ident)
         result=self.wait(ident)
@@ -236,9 +237,17 @@ class WorkspaceTests(unittest.TestCase):
         item=self.work.page(ident)['items'][0]
         handle,filename,fp,size=self.work.audio_lease(ident,item['id'])
         expected=(self.output/filename).read_bytes()
-        (self.output/filename).rename(self.output/'old.mp3')
-        (self.output/filename).write_bytes(b'replacement')
-        with handle:self.assertEqual(handle.read(),expected)
+        with handle:
+            if os.name == 'nt':
+                # Windows denies path replacement while the verified handle is open.
+                with self.assertRaises(PermissionError):(self.output/filename).rename(self.output/'old.mp3')
+            else:
+                (self.output/filename).rename(self.output/'old.mp3')
+                (self.output/filename).write_bytes(b'replacement')
+            self.assertEqual(handle.read(),expected)
+        if os.name == 'nt':
+            (self.output/filename).rename(self.output/'old.mp3')
+            (self.output/filename).write_bytes(b'replacement')
         with self.assertRaises(KeyError):self.work.audio_lease(ident,item['id'])
 
     def test_normal_save_is_not_reported_as_failure(self):
@@ -502,8 +511,8 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_honorific_evidence_uses_only_same_visible_matching_rule(self):
         for prefix,text,muted in [('001','女士，您好。',False),('002','他说“女士，您好”。',False),('003','女士，您好。',True)]:
-            (self.input/(prefix+'0.xml')).write_text(xml('AGENT',ref='fictional-'+prefix,text=text,mute=muted))
-            (self.input/(prefix+'1.xml')).write_text(xml('USER',ref='fictional-'+prefix,text='你好'))
+            (self.input/(prefix+'0.xml')).write_text(xml('AGENT',ref='fictional-'+prefix,text=text,mute=muted),encoding='utf-8')
+            (self.input/(prefix+'1.xml')).write_text(xml('USER',ref='fictional-'+prefix,text='你好'),encoding='utf-8')
         ident=self.import_ready()
         for item in self.work.page(ident)['items']:
             detail=self.work.detail(ident,item['id'])

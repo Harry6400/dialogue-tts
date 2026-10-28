@@ -161,6 +161,7 @@ class JobOwnershipTests(unittest.TestCase):
     def test_failed_pid_commit_terminates_own_child_without_losing_complete_output(self):
         original=subprocess.Popen;created=[];persist=self.jobs._persist
         def spawn(command,**kwargs):
+            if command[0] != sys.executable:return original(command,**kwargs)
             process=original([sys.executable,'-c','import time;time.sleep(20)'],**kwargs);created.append(process);return process
         def fail_after_launch(ident,item):
             if item['process'] is not None:raise OSError('fictional pid commit failure')
@@ -174,7 +175,7 @@ class WorkerTransferTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name);self.state=self.root/'state'
         self.input=self.root/'input';self.input.mkdir();self.output=self.root/'output';self.output.mkdir()
-        for role,suffix in (('AGENT','0'),('USER','1')):(self.input/f'001{suffix}.xml').write_text(xml(role,ref='fictional-transfer'))
+        for role,suffix in (('AGENT','0'),('USER','1')):(self.input/f'001{suffix}.xml').write_text(xml(role,ref='fictional-transfer'),encoding='utf-8')
         self.access=NativeWorkspaceAccess(self.state)
         self.source=self.access.register(self.input,'input');self.target=self.access.register(self.output,'output')
         self.jobs=Jobs(state_dir=self.state);self.work=Workspaces(self.state,self.jobs,self.access)

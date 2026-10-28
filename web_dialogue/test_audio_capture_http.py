@@ -1,4 +1,5 @@
 """Offline loopback acceptance of native-only audio ownership and receipts."""
+from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
@@ -105,7 +106,7 @@ class AudioCaptureHTTPTests(unittest.TestCase):
         self.assertEqual(receipt['path'], str(self.output / name))
         self.assertEqual((self.output / name).read_bytes(), self.audio)
         self.assertRegex(receipt['save_id'], r'^[a-f0-9]{32}$')
-        with sqlite3.connect(self.state / 'native-workspace.sqlite3') as database:
+        with closing(sqlite3.connect(self.state / 'native-workspace.sqlite3')) as database, database:
             row = database.execute('SELECT fingerprint,size,sha256,save_id FROM receipts WHERE folder=? AND name=?', (str(self.output), name)).fetchone()
         self.assertEqual(row, (self.metadata['fingerprint'], len(self.audio), self.digest, receipt['save_id']))
 
@@ -207,7 +208,7 @@ class AudioCaptureHTTPTests(unittest.TestCase):
         self.assertEqual(Path(other['path']).read_bytes(), self.audio)
         self.assertEqual([item['capture_id'] for item in self.pending()], [other['capture_id']])
         self.assertEqual(target.read_bytes(), b'keep colliding output')
-        with sqlite3.connect(self.state / 'native-workspace.sqlite3') as database:
+        with closing(sqlite3.connect(self.state / 'native-workspace.sqlite3')) as database, database:
             self.assertEqual(database.execute('SELECT count(*) FROM receipts').fetchone()[0], 0)
 
     def test_downloading_and_read_lease_protect_cleanup_and_report_distinct_safety(self):

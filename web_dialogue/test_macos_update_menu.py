@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 @unittest.skipUnless(shutil.which('node'), 'Menu dispatch contract requires the project Node runtime')
 class MacUpdateMenuTests(unittest.TestCase):
     def test_menu_prefers_shared_react_check_and_preserves_legacy_disabled_state(self):
-        source = (ROOT / 'native_macos/App.swift').read_text()
+        source = (ROOT / 'native_macos/App.swift').read_text(encoding='utf-8')
         script = source.split('let updateMenuCheckScript = """', 1)[1].split('"""', 1)[0]
         harness = r'''
 const assert = require('node:assert/strict');
