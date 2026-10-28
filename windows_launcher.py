@@ -444,7 +444,7 @@ $b.Save($args[1],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()
             try:
                 deadline = time.monotonic() + 25
                 while time.monotonic() < deadline:
-                    ready = window.evaluate_js("!!document.querySelector('[data-testid=workspace-ready]') && !!document.querySelector('[data-testid=app-shell]')")
+                    ready = window.evaluate_js("!!document.querySelector('[data-testid=workspace-ready]') && !!document.querySelector('[data-testid=app-shell]') && ['light','dark'].includes(document.documentElement.dataset.theme)")
                     if ready: break
                     time.sleep(.2)
                 if not ready: raise RuntimeError('Native React workspace did not become ready')
@@ -456,7 +456,7 @@ $b.Save($args[1],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()
                         if window.evaluate_js("document.documentElement.dataset.theme") == theme: return
                         time.sleep(.1)
                     raise RuntimeError('Theme change did not apply')
-                state = json.loads(window.evaluate_js("JSON.stringify({title:document.title,app_shell:!!document.querySelector('[data-testid=app-shell]'),sidebar:!!document.querySelector('[data-testid=sidebar]'),import_folder:!!document.querySelector('[data-testid=import-folder]'),consent_unchecked:!!document.querySelector('[data-testid=consent]')&&!document.querySelector('[data-testid=consent]').checked,generate_disabled:!!document.querySelector('[data-testid=generate]')&&document.querySelector('[data-testid=generate]').disabled,close_safety:typeof window.dialogueCloseSafety==='function'&&window.dialogueCloseSafety().persistent_workspace===true})"))
+                state = json.loads(window.evaluate_js("JSON.stringify({title:document.title,app_shell:!!document.querySelector('[data-testid=app-shell]'),sidebar:!!document.querySelector('[data-testid=sidebar]'),import_folder:!!document.querySelector('[data-testid=import-folder]'),consent_control_absent:!document.querySelector('[data-testid=consent]'),generate_disabled:!!document.querySelector('[data-testid=generate]')&&document.querySelector('[data-testid=generate]').disabled,close_safety:typeof window.dialogueCloseSafety==='function'&&window.dialogueCloseSafety().persistent_workspace===true})"))
                 report['screenshots'] = []
                 window.resize(1280, 800); set_theme('light')
                 report['screenshots'].append(capture_window('light-1280'))
@@ -465,7 +465,7 @@ $b.Save($args[1],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()
                 state['theme_restore'] = downloads.get_preferences()['theme'] == 'dark' and NativeDownloads(url, state_dir / 'preferences.json', native_token=native_token, workspace_access=server.native_access).get_preferences()['theme'] == 'dark'
                 state['scope_note'] = 'Real packaged React UI with one synthetic local XML pair; no live speech or update installation; screenshots require visual review.'
                 report.update(state)
-                report['passed'] = all(state[k] for k in ('app_shell', 'sidebar', 'import_folder', 'consent_unchecked', 'generate_disabled', 'close_safety', 'theme_restore'))
+                report['passed'] = all(state[k] for k in ('app_shell', 'sidebar', 'import_folder', 'consent_control_absent', 'generate_disabled', 'close_safety', 'theme_restore'))
                 if not report['passed']: report['error'] = 'Native React controls or privacy defaults failed verification'
             except Exception as exc: report['error'] = str(exc)
             finally: window.destroy()

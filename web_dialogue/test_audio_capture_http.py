@@ -1,10 +1,12 @@
 """Offline loopback acceptance of native-only audio ownership and receipts."""
+from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -105,7 +107,7 @@ class AudioCaptureHTTPTests(unittest.TestCase):
         self.assertEqual(receipt['path'], str(self.output / name))
         self.assertEqual((self.output / name).read_bytes(), self.audio)
         self.assertRegex(receipt['save_id'], r'^[a-f0-9]{32}$')
-        with sqlite3.connect(self.state / 'native-workspace.sqlite3') as database:
+        with closing(sqlite3.connect(self.state / 'native-workspace.sqlite3')) as database, database:
             row = database.execute('SELECT fingerprint,size,sha256,save_id FROM receipts WHERE folder=? AND name=?', (str(self.output), name)).fetchone()
         self.assertEqual(row, (self.metadata['fingerprint'], len(self.audio), self.digest, receipt['save_id']))
 
@@ -175,6 +177,17 @@ class AudioCaptureHTTPTests(unittest.TestCase):
             self.assertEqual(response.status,200);self.assertEqual(response.read(),self.audio)
         for kind in ('normalized','timeline'):
             self.assertEqual(self.request(self.route.rsplit('/',1)[0]+'/'+kind)[0],200)
+        # Receiving Content-Length bytes can precede the handler's finally
+        # block on Windows. Wait for its lease to close before testing release.
+        job_id = self.route.split('/')[3]
+        deadline = time.monotonic() + 5
+        while True:
+            with self.server.jobs.lock:
+                readers = self.server.jobs.items[job_id]['leases']
+            if not readers or time.monotonic() >= deadline:
+                break
+            time.sleep(.005)
+        self.assertEqual(readers, 0, 'HTTP result handler did not close its lease')
 
     def test_complete_keeps_current_manual_audio_and_auxiliary_links_until_saved(self):
         job_id=self.current_manual_source()
@@ -207,7 +220,7 @@ class AudioCaptureHTTPTests(unittest.TestCase):
         self.assertEqual(Path(other['path']).read_bytes(), self.audio)
         self.assertEqual([item['capture_id'] for item in self.pending()], [other['capture_id']])
         self.assertEqual(target.read_bytes(), b'keep colliding output')
-        with sqlite3.connect(self.state / 'native-workspace.sqlite3') as database:
+        with closing(sqlite3.connect(self.state / 'native-workspace.sqlite3')) as database, database:
             self.assertEqual(database.execute('SELECT count(*) FROM receipts').fetchone()[0], 0)
 
     def test_downloading_and_read_lease_protect_cleanup_and_report_distinct_safety(self):

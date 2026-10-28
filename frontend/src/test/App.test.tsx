@@ -137,6 +137,18 @@ it('moves compact review across page boundaries in both directions without chang
   expect(backend.calls.some(call=>call.path.endsWith('/selection')||call.path.endsWith('/start'))).toBe(false);
 });
 
+it('restores preferences when the Windows bridge arrives after React without changing the active batch output', async () => {
+  const backend = server(); render(<App/>);
+  await screen.findByTestId('workspace-ready');
+  const preferences = vi.fn().mockResolvedValue({ok: true, theme: 'dark', output_folder: {folder_id: 'other-output', path: '/fictional/unrelated-output', valid: true}});
+  (window as NativeHost).pywebview = {api: {get_preferences: preferences}};
+  await act(async () => {window.dispatchEvent(new Event('pywebviewready'));});
+  await waitFor(() => expect(document.documentElement.dataset.theme).toBe('dark'));
+  expect(screen.getByTestId('output-folder')).toHaveTextContent('output');
+  expect(screen.getByTestId('output-folder')).not.toHaveTextContent('unrelated-output');
+  expect(backend.calls.some(call => call.body)).toBe(false);
+});
+
 it('loads a bounded workspace without generating on repeated mounting and hides muted text', async () => {
   const backend = server();
   render(<StrictMode><App/></StrictMode>);

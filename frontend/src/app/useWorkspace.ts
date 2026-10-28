@@ -52,6 +52,13 @@ export function useWorkspace() {
   useEffect(() => {
     const bridge = createNativeBridge(); native.current = bridge;
     let alive = true;
+    async function nativeReady() {
+      const prefs = await bridge.call('get_preferences', {});
+      if (!alive || prefs.kind !== 'success') return;
+      setPreferences(prefs.value);
+      if (!workspaceRef.current) setOutput(prefs.value.output_folder || null);
+    }
+    window.addEventListener('pywebviewready', nativeReady);
     async function load() {
       try {
         const configuration = await api.getConfig();
@@ -64,7 +71,7 @@ export function useWorkspace() {
       finally {if (alive) setLoading(false);}
     }
     void load();
-    return () => {alive = false; bridge.dispose(); native.current = null;};
+    return () => {alive = false; window.removeEventListener('pywebviewready', nativeReady); bridge.dispose(); native.current = null;};
   }, [api]);
 
   useEffect(() => {

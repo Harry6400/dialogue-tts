@@ -1,6 +1,11 @@
 name: Build Windows app
 on:
   workflow_dispatch:
+    inputs:
+      confirm_upgrade:
+        description: Verify official v0.3.4 to v0.4.0 after confirming the isolated OS prompt
+        type: boolean
+        default: false
   push:
     branches: [main]
     tags: ['v*']
@@ -30,6 +35,39 @@ jobs:
         run: python -m unittest test_safe_updater test_windows_ci_classification test_gitee_provider test_update_sources -v
       - name: Package and verify the Windows application
         run: python tools/build_windows.py
+      - name: Verify official release upgrade after system confirmation
+        if: inputs.confirm_upgrade == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIALOGUE_CONFIRM_TEST_UPDATE: '1'
+          DIALOGUE_RELEASE_OLD_VERSION: '0.3.4'
+        shell: pwsh
+        run: |
+          gh release download v0.3.4 --pattern DialogueTTS-Windows-x64.zip --dir verification/official-old
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          gh release download v0.4.0 --pattern DialogueTTS-Windows-x64.zip --dir verification/official-new
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $oldZip = 'verification/official-old/DialogueTTS-Windows-x64.zip'
+          $newZip = 'verification/official-new/DialogueTTS-Windows-x64.zip'
+          if ((Get-FileHash $oldZip).Hash.ToLower() -ne 'e3a7c4ae6fda7a940667fe5bf8afe354c6986444e6f63c6b7564d4342ce1ad4e') { throw 'Old release hash mismatch' }
+          if ((Get-FileHash $newZip).Hash.ToLower() -ne 'eff63ed7bda78150e59f831c294cfef66cde1557e5f665675943e1d969371490') { throw 'New release hash mismatch' }
+          Expand-Archive $oldZip verification/official-old/extracted
+          Expand-Archive $newZip verification/official-new/extracted
+          $oldExe = @(Get-ChildItem verification/official-old/extracted -Recurse -Filter DialogueTTS.exe)
+          $newExe = @(Get-ChildItem verification/official-new/extracted -Recurse -Filter DialogueTTS.exe)
+          if ($oldExe.Count -ne 1 -or $newExe.Count -ne 1) { throw 'Ambiguous release executable' }
+          $env:DIALOGUE_RELEASE_NEW_EXE = $newExe[0].FullName
+          python tools/windows_upgrade_smoke.py $oldExe[0].FullName dist/windows-upgrade-confirmed.json
+          exit $LASTEXITCODE
+      - name: Retain confirmed upgrade evidence separately
+        if: always() && inputs.confirm_upgrade == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-upgrade-confirmed
+          if-no-files-found: warn
+          path: |
+            dist/windows-upgrade-confirmed.json
+            dist/windows-update-*.png
       - name: Retain the real build and verification evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -44,5 +82,6 @@ jobs:
             dist/windows-gui-smoke.json
             dist/windows-gui-*.png
             dist/windows-upgrade-smoke.json
+            dist/windows-upgrade-confirmed.json
             dist/windows-update-prompt-*.png
             dist/windows-update-target-*.png
