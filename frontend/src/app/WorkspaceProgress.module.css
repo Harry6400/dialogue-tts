@@ -1,0 +1,4 @@
+.track{display:block!important;position:relative;height:4px;margin-top:10px;overflow:hidden;border-radius:4px;background:var(--line)}
+.activity{display:block;width:36%;height:100%;border-radius:inherit;background:var(--accent);animation:scanActivity 1.5s cubic-bezier(.4,0,.2,1) infinite}
+@keyframes scanActivity{from{transform:translateX(-105%)}to{transform:translateX(285%)}}
+@media(prefers-reduced-motion:reduce){.activity{animation:none;transform:translateX(90%)}}

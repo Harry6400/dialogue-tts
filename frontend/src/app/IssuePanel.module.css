@@ -1,4 +1,4 @@
-.panel{flex-shrink:0;margin:0 20px;padding:10px 0;border-bottom:1px solid var(--line);min-width:0}
+.panel{flex-shrink:0;margin:0;padding:13px 18px;border-bottom:1px solid var(--notice-line);min-width:0;background:var(--warning-soft)}
 .heading{display:flex;align-items:center;gap:9px;min-height:25px;margin-bottom:7px}
 .heading strong{font-size:12px;font-weight:600;line-height:1.5}
 .heading>span{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
@@ -6,8 +6,8 @@
 .next svg{width:13px;height:13px}
 .categories{display:flex;gap:5px;overflow-x:auto;padding:1px 1px 4px;scrollbar-width:thin}
 .categories button{display:inline-flex;align-items:center;gap:5px;flex-shrink:0;min-height:27px;padding:4px 7px;border:1px solid transparent;border-radius:5px;background:transparent;font-size:11px;line-height:1.5;color:var(--muted);white-space:nowrap}
-.categories button>span{font-variant-numeric:tabular-nums;font-size:10px}
+.categories button>span{font-variant-numeric:tabular-nums;font-size:11px}
 .categories button[aria-pressed=true]{border-color:var(--selected-line);background:var(--accent-soft);color:var(--accent-text);font-weight:550}
 .guidance,.notice{font-size:11px;line-height:1.65;margin:4px 0 0;color:var(--muted)}
 .notice{color:var(--accent-text)}
-@media(max-width:800px){.panel{margin:0 16px;padding:8px 0}.heading{margin-bottom:5px}.categories{padding-bottom:3px}}
+@media(max-width:800px){.panel{margin:0;padding:10px 12px}.heading{margin-bottom:5px}.categories{padding-bottom:3px}}

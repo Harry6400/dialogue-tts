@@ -6,7 +6,7 @@ export type PrimaryAction = 'cancel' | 'pause' | 'restore' | 'resume_offline' | 
 const stopped = new Set(['paused', 'interrupted', 'done']);
 const offlineLabels: Record<string, string> = {recovery_scan: '继续扫描', recovery_settings: '继续更新设置', recovery_checking: '继续核验'};
 
-/** Both the footer and controller use this decision, including recovery gates. */
+/** Both the run controls and controller use this decision, including recovery gates. */
 export function workspaceActions({workspace: w, output, busy, loading, safety}: ActionContext) {
   const running = ['scanning', 'running', 'pausing'].includes(w.status);
   const interrupted = ['paused', 'interrupted'].includes(w.status);

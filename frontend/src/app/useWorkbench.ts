@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useRef, useState, useSyncExternalStore} from 'react';
 import type {JobSnapshot, SoundSettings} from '../types/contracts';
 import {requestId} from '../services/api';
 import type {Modal} from './AppDialogs';
@@ -9,7 +9,14 @@ import {blocksUpdate} from './operation';
 import {workspaceActions} from './workspaceActions';
 type SafetyHost = Window & {dialogueCloseSafety?: () => object; dialogueUpdateSafety?: () => object; dialogueShowUnsaved?: () => void; dialogueUpdateLock?: (value: boolean) => void; dialogueCheckForUpdates?: () => void};
 const defaultSettings: SoundSettings = {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', USER: 'zh-CN-XiaoyiNeural'}, rate: 1, pause_ms: 250, auto_voice: true, manual_user_voice: false};
+function subscribeToWindowSize(listener: () => void) {
+  window.addEventListener('resize', listener);
+  return () => window.removeEventListener('resize', listener);
+}
+const windowLayout = () => (window.innerWidth <= 1100 ? 1 : 0) | (window.innerWidth <= 900 ? 2 : 0);
 export function useWorkbench(model: WorkspaceModel) {
+  const layout = useSyncExternalStore(subscribeToWindowSize, windowLayout);
+  const isNarrow = !!(layout & 1), compactReview = !!(layout & 2);
   const {workspace, config} = model;
   const [mode, setMode] = useState<'overview' | 'review'>('overview');
   const [scope, setScope] = useState<'batch' | 'call'>('batch');
@@ -18,7 +25,7 @@ export function useWorkbench(model: WorkspaceModel) {
   const [modal, setModal] = useState<Modal | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [search, setSearch] = useState('');
-  const [previewOpen, setPreviewOpen] = useState(true);
+  const [callPickerOpen, setCallPickerOpen] = useState(false);
   const auditionSettings = useRef<SoundSettings>(defaultSettings);
   const [auditionJob, setAuditionJob] = useState<JobSnapshot | null>(null);
   const [updateLocked, setUpdateLocked] = useState(false);
@@ -34,6 +41,19 @@ export function useWorkbench(model: WorkspaceModel) {
   const actions = workspace ? workspaceActions({workspace, output: model.output, busy, loading: model.loading, safety: model.safety}) : null;
   const restoredAccess = actions?.restoredAccess ?? false;
   const needsVerification = actions?.needsVerification ?? false;
+
+  useEffect(() => {
+    const root=document.documentElement;
+    const previous=root.dataset.inputModality;
+    root.dataset.inputModality='keyboard';
+    const pointer=()=>{root.dataset.inputModality='pointer';};
+    const keyboard=(event:KeyboardEvent)=>{
+      if (['Tab','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','PageUp','PageDown','Enter','Escape'].includes(event.key) || (event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='f') root.dataset.inputModality='keyboard';
+    };
+    document.addEventListener('pointerdown',pointer,true);
+    document.addEventListener('keydown',keyboard,true);
+    return ()=>{document.removeEventListener('pointerdown',pointer,true);document.removeEventListener('keydown',keyboard,true);if(previous)root.dataset.inputModality=previous;else delete root.dataset.inputModality;};
+  },[]);
 
   useEffect(() => {if (model.preferences?.theme) {setTheme(model.preferences.theme); document.documentElement.dataset.theme = model.preferences.theme;}}, [model.preferences?.theme]);
   useEffect(() => {const timer = setTimeout(() => {if (model.query !== search) model.setQuery(search);}, 250); return () => clearTimeout(timer);}, [search, model.query, model.setQuery]);
@@ -92,12 +112,12 @@ export function useWorkbench(model: WorkspaceModel) {
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && !modal) {event.preventDefault(); searchRef.current?.focus();}
-      if (event.key === 'Escape' && !modal && !narrowOpen && mode === 'review' && !(event.target instanceof HTMLSelectElement)) setMode('overview');
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && !modal && !callPickerOpen) {event.preventDefault(); searchRef.current?.focus();}
+      if (event.key === 'Escape' && !modal && !narrowOpen && !callPickerOpen && mode === 'review' && !(event.target instanceof HTMLSelectElement)) setMode('overview');
     }
     document.addEventListener('keydown', keyboard);
     return () => document.removeEventListener('keydown', keyboard);
-  }, [mode, modal, narrowOpen]);
+  }, [mode, modal, narrowOpen, callPickerOpen]);
 
   async function changeTheme() {
     await model.perform({kind: 'preferences', label: '切换外观'}, async () => {
@@ -126,7 +146,7 @@ export function useWorkbench(model: WorkspaceModel) {
   function review() {setMode('review'); setScope('call');}
   const resumable = actions?.resumable ?? false;
   async function startAudition() {await model.perform({kind: 'audition', label: '创建试听'}, async () => {setAuditionJob(await model.api.audition(auditionSettings.current, requestId()));});}
-  return {workspace, config, mode, setMode, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, needsVerification, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates, reports};
+  return {workspace, config, mode, setMode, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, theme, search, setSearch, actionHelp:actions?.help, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, needsVerification, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, isNarrow, compactReview, callPickerOpen, setCallPickerOpen, updateLocked, importFolder, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates, reports};
 }
 
 export type WorkbenchUi = ReturnType<typeof useWorkbench>;

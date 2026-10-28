@@ -9,7 +9,7 @@ const settings = {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', USER: 'zh-CN-XiaoyiNeu
 const item: WorkspaceItem = {id: 'item-one', filename: '000123.mp3', status: 'ready', selected: false, customer_voice: 'zh-CN-XiaoyiNeural', voice_source: '称呼未判定'};
 function summary(patch: Partial<WorkspaceSummary> = {}): WorkspaceSummary {return {id: 'workspace-one', status: 'ready', phase: 'ready', revision: 1, discovered: 120000, scanned: 120000, total: 60000, ready: 60000, error: 0, issues: {total: 0, pairing: 0, input: 0, changed: 0, conflict: 0, synthesis: 0, save: 0, other: 0}, save_pending: 0, saved: 0, selected: 0, ready_selected: patch.selected ?? 0, selection_query: {q: '', filter: 'all', issue: ''}, processed: 0, input_folder: {folder_id: 'input-grant', path: '/fictional/input', valid: true}, output_folder: {folder_id: 'output-grant', path: '/fictional/output', valid: true}, settings, selection_id: 'selection-one', can_edit: true, has_run_plan: false, ...patch};}
 
-function server(initial: WorkspaceSummary | null = summary(), matchEvidence=false, initialItem: Partial<WorkspaceItem> = {}) {
+function server(initial: WorkspaceSummary | null = summary(), matchEvidence=false, initialItem: Partial<WorkspaceItem> = {}, pageItems?:WorkspaceItem[]) {
   let workspace = initial;
   let currentItem = {...item, ...initialItem};
   let globalSafety: WorkspaceSafety={busy:false,unsaved:false,saving:false,pending:false};
@@ -34,14 +34,109 @@ function server(initial: WorkspaceSummary | null = summary(), matchEvidence=fals
       workspace = {...workspace!, revision: workspace!.revision + 1}; data = workspace;
     }
     else if (url.includes('/snapshot?')) data = {...workspace, items: [], reset: false};
-    else data = {...workspace, items: url.includes('q=notfound')?[]:[currentItem], matched_total: url.includes('q=notfound')?0:60000, page: 1, page_size: 100, selection_hidden_count: 0};
+    else {const page=Number(new URL(url,'http://localhost').searchParams.get('page')||1);data = {...workspace, items: url.includes('q=notfound')?[]:pageItems?pageItems.slice((page-1)*100,page*100):[currentItem], matched_total: url.includes('q=notfound')?0:pageItems?.length??60000, page, page_size: 100, selection_hidden_count: 0};}
     return new Response(JSON.stringify(data), {headers: {'Content-Type': 'application/json'}});
   });
   vi.stubGlobal('fetch', transport);
-  return {calls, transport, invalidateOutput:()=>{workspace={...workspace!,output_folder:{...workspace!.output_folder!,valid:false}};},setSafety:(next:typeof globalSafety)=>{globalSafety=next;}, restore: () => {workspace = {...workspace!, input_folder: {...workspace!.input_folder, valid: true}, output_folder: {...workspace!.output_folder!, valid: true}};}};
+  return {calls, transport, updateWorkspace:(patch:Partial<WorkspaceSummary>)=>{workspace={...workspace!,...patch};}, invalidateOutput:()=>{workspace={...workspace!,output_folder:{...workspace!.output_folder!,valid:false}};},setSafety:(next:typeof globalSafety)=>{globalSafety=next;}, restore: () => {workspace = {...workspace!, input_folder: {...workspace!.input_folder, valid: true}, output_folder: {...workspace!.output_folder!, valid: true}};}};
 }
 
 afterEach(() => {delete (window as NativeHost).pywebview; vi.unstubAllGlobals();});
+
+it('polls real scan counts and phases, then removes activity when the scan completes', async () => {
+  const backend=server(summary({status:'scanning',phase:'enumerating',scanned:0,discovered:0,total:0,ready:0}));
+  render(<App/>);
+  await screen.findByRole('progressbar',{name:'扫描进度'});
+  backend.updateWorkspace({revision:2,phase:'reading',scanned:300,discovered:300});
+  await waitFor(()=>expect(screen.getByRole('progressbar',{name:'扫描进度'})).toHaveAttribute('aria-valuetext','正在读取 XML，已扫描 300 份文件'),{timeout:3000});
+  backend.updateWorkspace({revision:3,phase:'validating'});
+  await waitFor(()=>expect(screen.getByRole('status')).toHaveTextContent('正在配对与核验通话'),{timeout:3000});
+  backend.updateWorkspace({revision:4,status:'ready',phase:'ready',total:150,ready:150});
+  await waitFor(()=>expect(screen.queryByRole('progressbar',{name:'扫描进度'})).not.toBeInTheDocument(),{timeout:3000});
+  expect(backend.calls.some(call=>call.path.endsWith('/start'))).toBe(false);
+},10000);
+
+it('synchronizes the sound panel trigger immediately when crossing the drawer breakpoint', async () => {
+  vi.stubGlobal('innerWidth',1480); server(); render(<App/>);
+  await screen.findByTestId('workspace-ready');
+  const trigger=screen.getByRole('button',{name:'显示声音与输出'});
+  expect(trigger).toHaveAttribute('aria-expanded','true');
+  vi.stubGlobal('innerWidth',760); fireEvent(window,new Event('resize'));
+  expect(trigger).toHaveAttribute('aria-expanded','false');
+  fireEvent.click(trigger);
+  const drawer=await screen.findByRole('dialog',{name:'声音与输出'});
+  expect(trigger).toHaveAttribute('aria-expanded','true');
+  fireEvent(drawer,new Event('cancel',{cancelable:true}));
+  expect(trigger).toHaveAttribute('aria-expanded','false');
+  vi.stubGlobal('innerWidth',1480); fireEvent(window,new Event('resize'));
+  expect(trigger).toHaveAttribute('aria-expanded','true');
+});
+
+it('opens full review directly from a filename and keeps run controls in the header', async () => {
+  server();render(<App/>);
+  fireEvent.click(await screen.findByRole('button',{name:'000123.mp3'}));
+  expect(screen.getByRole('button',{name:'正文核对'})).toHaveAttribute('aria-pressed','true');
+  expect(screen.queryByRole('region',{name:'通话快速预览'})).not.toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:'显示预览'})).not.toBeInTheDocument();
+  expect(screen.getByTestId('generate').closest('header')).not.toBeNull();
+  expect(document.querySelector('main>footer')).toBeNull();
+});
+
+it('jumps directly to distant pages without sending selection or unbounded list requests', async () => {
+  const backend=server();render(<App/>);
+  await screen.findByRole('button',{name:'000123.mp3'});
+  const input=screen.getByRole('textbox',{name:'跳转页码'});
+  expect(input).toBeEnabled();
+  fireEvent.change(input,{target:{value:'500'}});fireEvent.keyDown(input,{key:'Enter'});
+  await waitFor(()=>expect(backend.calls.some(call=>call.path.includes('page=500&limit=100'))).toBe(true));
+  expect(backend.calls.some(call=>call.path.endsWith('/selection')||call.path.endsWith('/start'))).toBe(false);
+});
+
+it('switches calls in a compact review picker, restores focus and keeps review open on Escape', async () => {
+  vi.stubGlobal('innerWidth',760); server(); render(<App/>);
+  await screen.findByRole('button',{name:'000123.mp3'});
+  fireEvent.click(screen.getByRole('button',{name:'正文核对'}));
+  const trigger=screen.getByRole('button',{name:'切换通话'});
+  trigger.focus(); fireEvent.click(trigger);
+  const dialog=await screen.findByRole('dialog',{name:'切换通话'});
+  fireEvent(dialog,new Event('cancel',{cancelable:true}));
+  expect(trigger).toHaveFocus();
+  expect(screen.getByRole('button',{name:'正文核对'})).toHaveAttribute('aria-pressed','true');
+  fireEvent.click(trigger);
+  fireEvent.click(within(screen.getByRole('dialog',{name:'切换通话'})).getByRole('button',{name:'000123.mp3'}));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(trigger).toHaveFocus();
+  vi.stubGlobal('innerWidth',1480);fireEvent(window,new Event('resize'));
+  expect(screen.queryByRole('navigation',{name:'核对通话导航'})).not.toBeInTheDocument();
+});
+
+it('keeps empty search results and clearing available when the compact call list is closed', async () => {
+  vi.stubGlobal('innerWidth',760);server();render(<App/>);
+  await screen.findByRole('button',{name:'000123.mp3'});
+  fireEvent.click(screen.getByRole('button',{name:'正文核对'}));
+  fireEvent.change(screen.getByRole('searchbox',{name:'搜索通话编号'}),{target:{value:'notfound'}});
+  const reader=()=>screen.getByRole('region',{name:'完整核对'});
+  await waitFor(()=>expect(within(reader()).getByText('没有符合条件的通话')).toBeInTheDocument());
+  fireEvent.click(within(reader()).getByRole('button',{name:'清除筛选'}));
+  await waitFor(()=>expect(within(reader()).getByRole('heading',{name:'000123.mp3'})).toBeInTheDocument());
+  expect(screen.getByRole('searchbox',{name:'搜索通话编号'})).toHaveValue('');
+});
+
+it('moves compact review across page boundaries in both directions without changing selection', async () => {
+  vi.stubGlobal('innerWidth',760);
+  const items=Array.from({length:101},(_,i)=>({...item,id:'call-'+i,filename:String(i).padStart(6,'0')+'.mp3'}));
+  const backend=server(summary({total:101,ready:101}),false,{},items);render(<App/>);
+  const table=await screen.findByRole('table',{name:'通话列表'});
+  fireEvent.click(await within(table).findByText('000099.mp3',{selector:'button'}));
+  const navigation=screen.getByRole('navigation',{name:'核对通话导航'});
+  const reader=screen.getByRole('region',{name:'完整核对'});
+  fireEvent.click(within(navigation).getByRole('button',{name:'下一通'}));
+  await within(reader).findByRole('heading',{name:'000100.mp3'});
+  expect(within(navigation).getByRole('button',{name:'下一通'})).toBeDisabled();
+  fireEvent.click(within(navigation).getByRole('button',{name:'上一通'}));
+  await within(reader).findByRole('heading',{name:'000099.mp3'});
+  expect(backend.calls.some(call=>call.path.endsWith('/selection')||call.path.endsWith('/start'))).toBe(false);
+});
 
 it('restores preferences when the Windows bridge arrives after React without changing the active batch output', async () => {
   const backend = server(); render(<App/>);
@@ -112,6 +207,7 @@ it('restores access before resuming and never resumes automatically after restar
   render(<App/>); await screen.findByTestId('resume');
   expect(screen.getByTestId('resume')).toBeDisabled();
   expect(backend.calls.some(call => call.path.endsWith('/resume'))).toBe(false);
+  fireEvent.click(await screen.findByRole('button',{name:'000123.mp3'}));
   await screen.findAllByText('此通对话暂无可显示正文。');
   expect(screen.queryByText('虚构会议室预约。')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', {name: '恢复访问'}));
@@ -126,7 +222,7 @@ it('restores access before resuming and never resumes automatically after restar
 });
 
 it('shows actual source roles even when the filename suffixes are reversed', async () => {
-  server(); render(<App/>); await screen.findAllByText('虚构会议室预约。');
+  server(); render(<App/>); fireEvent.click(await screen.findByRole('button',{name:'000123.mp3'})); await screen.findAllByText('虚构会议室预约。');
   fireEvent.click(screen.getByRole('button', {name: '查看真实源文件'}));
   const agentName = screen.getByText('0001231.xml');
   const customerName = screen.getByText('0001230.xml');
@@ -267,7 +363,7 @@ it('uses batch filters as the single list scope while preserving selection and r
   await waitFor(() => expect(screen.getByTestId('generate')).toHaveTextContent('生成 1 通'));
   fireEvent.click(screen.getByRole('button', {name: /^已保存/}));
   await waitFor(() => expect(backend.calls.filter(call => call.path.includes('?q=')).at(-1)?.path).toContain('filter=saved'));
-  expect(screen.getByRole('heading', {name: '当前批次'})).toBeVisible();
+  expect(screen.getByRole('heading', {name: 'input'})).toHaveAttribute('title', 'input');
   fireEvent.click(screen.getByRole('button', {name: /^进行中/}));
   expect(screen.getByTestId('task-progress')).toBeVisible();
   fireEvent.click(screen.getByRole('button', {name: /^全部/}));
@@ -324,6 +420,7 @@ it('applies then restores selected voices through the same selection snapshot re
   fireEvent.click(await screen.findByRole('checkbox', {name: '选择 000123.mp3'}));
   const picker = await screen.findByRole('combobox', {name: '所选通话客户声音'});
   await waitFor(() => expect(picker).toBeEnabled());
+  expect(picker.closest('aside')).toBeNull();
   expect(screen.queryByRole('button', {name: '所选通话恢复跟随批次'})).not.toBeInTheDocument();
   fireEvent.keyDown(picker, {key: 'Enter'});
   fireEvent.click(await screen.findByRole('option', {name: /晓晓/}));

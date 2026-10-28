@@ -39,7 +39,7 @@ export function ApplicationSettings({model, theme, changeTheme, onPauseExit, onC
       <h3 id="application-preferences">使用偏好</h3>
       <div className={styles.row}>
         <span className={styles.rowIcon}><Icon name="sun"/></span>
-        <div className={styles.description}><strong>外观</strong><p>选择适合当前环境的界面</p></div>
+        <div className={styles.description}><strong>外观</strong></div>
         <div className={styles.appearance} role="group" aria-label="应用外观">
           <button disabled={busy} aria-pressed={theme === 'light'} onClick={() => {if (theme !== 'light') void changeTheme();}}><Icon name="sun"/>浅色</button>
           <button disabled={busy} aria-pressed={theme === 'dark'} onClick={() => {if (theme !== 'dark') void changeTheme();}}><Icon name="moon"/>深色</button>

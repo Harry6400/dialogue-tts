@@ -82,7 +82,7 @@ function pageControl(name: string) {return labelled(activeTable().parentElement!
 function issuePanel() {return labelled(document, '问题分类');}
 function issueControl(name: string) {return within(issuePanel()).getByRole('button', {name});}
 function statusFilter() {return within(labelled(document, '通话状态筛选')).getByRole('button', {name: /^需处理/});}
-function footerControl(name: string) {return within(document.querySelector('footer')!).getByRole('button', {name});}
+function footerControl(name: string) {return within(document.querySelector('main>header')!).getByRole('button', {name});}
 
 it('uses global reason counts while pages and selection requests retain the chosen issue scope', async () => {
   const backend = server(); render(<App/>);
@@ -139,7 +139,8 @@ it('ignores a next-problem reply after its category has changed', async () => {
   await act(async () => resolve({item_id: 'input-200', page: 3, page_size: 100, wrapped: false, matched_total: 205, filter: 'error', issue: 'input'}));
   expect(issueControl('筛选保存异常，1 通')).toHaveAttribute('aria-pressed', 'true');
   expect(within(activeTable()).queryByText('100200.mp3', {selector: 'button'})).not.toBeInTheDocument();
-  const preview = screen.getByRole('region', {name: '通话快速预览'});
+  fireEvent.click(call('900005.mp3'));
+  const preview = screen.getByRole('region', {name: '完整核对'});
   expect(within(preview).getByText(/检查输出目录权限与可用空间/)).toBeVisible();
 });
 
@@ -159,7 +160,7 @@ it('uses eligible selected count for generation and retries synthesis only from 
   // selection; a never-started ready batch cannot retry a prior plan.
   const backend = server({status: 'done', has_run_plan: true, save_pending: 0, save_error: 0}); render(<App/>); await findCall('000001.mp3');
   expect(screen.getByTestId('generate')).toHaveTextContent('生成 1 通');
-  expect(screen.getByText('已选 2 通 · 可生成 1 通')).toBeVisible();
+  expect(screen.getByRole('group',{name:'已选 2 通 · 可生成 1 通'})).toBeVisible();
   await waitFor(() => expect(footerControl('重试合成')).toBeEnabled());
   expect(backend.calls.some(call => call.url.pathname.endsWith('/retry'))).toBe(false);
   fireEvent.click(footerControl('重试合成'));

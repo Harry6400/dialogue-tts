@@ -18,9 +18,9 @@ function soundContext(props: Props) {
     if (!workspace||!settings) return;
     await model.mutate({kind: 'settings', label: '保存声音设置'},()=>model.api.setWorkspaceSettings(workspace.id,{settings:{...settings,...patch}}),true);
   }
-  async function override(value:string,selected=false) {
-    if (!workspace||(!selected&&!current)) return;
-    await model.mutate({kind: 'settings', label: '保存客户声音'},()=>model.api.setWorkspaceSettings(workspace.id,{...(selected?{selection_id:workspace.selection_id}:{item_id:current!.id}),customer_voice:value?value as VoiceId:null}),true);
+  async function override(value:string) {
+    if (!workspace||!current) return;
+    await model.mutate({kind: 'settings', label: '保存客户声音'},()=>model.api.setWorkspaceSettings(workspace.id,{item_id:current.id,customer_voice:value?value as VoiceId:null}),true);
   }
   return {model,workspace,settings,current,effectiveCustomer,disabled,auditionDisabled,auditionSettings,update,override,props};
 }
@@ -36,7 +36,7 @@ function CallSettings({ctx}:{ctx:Context}) {
   const {model,current,settings,effectiveCustomer,override,props}=ctx;
   const manual=current?.voice_source==='手动选择';
   return <>
-    <div className={styles.settingGroup}><span className={styles.scopeName}>{itemTitle(current)}</span><div className={styles.readonlyField}><span>客服</span><strong>{shortVoiceName(model.config?.voices.find(voice=>voice.id===settings?.voices.AGENT)?.label)}</strong></div><label htmlFor="call-voice" className={styles.fieldLabel}>客户声音</label><div className={styles.voiceInput}><VoicePicker ctx={ctx} id="call-voice" label="当前通话客户声音" value={manual?current?.customer_voice:''} onChange={value=>void override(value)} inherited disabled={current?.status!=='ready'}/><AuditionButton ctx={ctx} label="试听当前通话的有效声音"/></div>{current?.customer_voice&&<p className={styles.resolved}>{shortVoiceName(model.config?.voices.find(voice=>voice.id===effectiveCustomer)?.label)} · {voiceSource(model.detail?.voice_choice?.reason||current.voice_source||'default')}</p>}</div>
+    <div className={styles.settingGroup}><span className={styles.scopeName}>{itemTitle(current)}</span><div className={styles.readonlyField}><span>客服</span><strong>{shortVoiceName(model.config?.voices.find(voice=>voice.id===settings?.voices.AGENT)?.label)}</strong></div><label htmlFor="call-voice" className={styles.fieldLabel}>客户声音</label><div className={styles.voiceInput}><VoicePicker ctx={ctx} id="call-voice" label="当前通话客户声音" value={manual?current?.customer_voice:''} onChange={value=>void override(value)} inherited disabled={current?.status!=='ready'}/><AuditionButton ctx={ctx} label="试听当前通话的有效声音"/></div>{current?.customer_voice&&<div className={styles.resolved}><span>实际声音</span><strong>{shortVoiceName(model.config?.voices.find(voice=>voice.id===effectiveCustomer)?.label)}</strong><span>{voiceSource(model.detail?.voice_choice?.reason||current.voice_source||'default')}</span></div>}</div>
     <div className={styles.settingGroup}><div className={styles.readonlyField}><span>语速</span><strong>{(settings?.rate||1).toFixed(2)}×</strong></div><div className={styles.readonlyField}><span>段间停顿</span><strong>{settings?.pause_ms??250} ms</strong></div><button className={styles.textButton} onClick={()=>props.setScope('batch')}>调整批次设置 <Icon name="arrow"/></button></div>
   </>;
 }
@@ -51,12 +51,7 @@ function OutputSettings({ctx}:{ctx:Context}) {
   const {model,workspace,props}=ctx;
   return <div className={styles.settingGroup}><div className={styles.outputHeading}><span className={styles.fieldLabel}>输出文件夹</span><button className={styles.infoButton} aria-label="固定命名规则" title="保存与命名规则" onClick={()=>props.onHelp('names')}><Icon name="info"/></button></div><div className={styles.outputFolderControl}><button data-testid="output-folder" className={styles.folderButton} aria-label="更换输出文件夹" title={model.output?.path || '选择输出文件夹'} disabled={!!model.pending||isWorking(workspace)} onClick={()=>void model.chooseOutput()}><Icon name="folder"/><span>{model.output?shortPath(model.output.path):'选择文件夹'}</span><Icon name="chevron"/></button>{model.output&&<button className={styles.outputReveal} aria-label="打开结果文件夹" title="打开结果文件夹" onClick={()=>void model.perform({kind: 'reveal', label: '打开结果文件夹'},async()=>{if(model.native.current)model.nativeValue(await model.native.current.call('reveal_output',{folder_id:model.output!.folder_id}));})}><Icon name="arrow"/></button>}</div></div>;
 }
-function SelectionSettings({ctx}:{ctx:Context}) {
-  const {workspace,override}=ctx;
-  if (!workspace?.selected) return null;
-  return <div className={styles.settingGroup}><label className={styles.fieldLabel} htmlFor="selected-voice">所选 {workspace.selected.toLocaleString('zh-CN')} 通客户声音</label><VoicePicker ctx={ctx} id="selected-voice" label="所选通话客户声音" onChange={value=>void override(value,true)} inherited bulk/></div>;
-}
 export function SettingsPanel(props:Props) {
   const ctx=soundContext(props);
-  return <aside className={styles.settings} aria-label="声音与批次设置"><header className={styles.settingsHead}><h2>声音与输出</h2><button className={styles.iconButton} aria-label="收起设置" onClick={props.onClose}><Icon name="close"/></button></header><div className={styles.scopeTabs} aria-label="设置范围"><button aria-pressed={props.scope==='batch'} onClick={()=>props.setScope('batch')}>整个批次</button><button aria-pressed={props.scope==='call'} onClick={()=>props.setScope('call')} disabled={!ctx.current}>当前通话</button></div><div className={styles.settingsBody}>{props.scope==='call'?<CallSettings ctx={ctx}/>:<BatchSettings ctx={ctx}/>}<OutputSettings ctx={ctx}/>{props.scope==='batch'&&<SelectionSettings ctx={ctx}/>} {ctx.disabled&&ctx.workspace&&<p className={styles.quiet}>{ctx.workspace.input_folder.valid===false?'恢复文件夹访问后可调整声音与输出。':ctx.workspace.has_run_plan?'当前生成计划已固定。结束任务后可调整。':'扫描或操作完成后可调整设置。'}</p>}</div></aside>;
+  return <aside className={styles.settings} aria-label="声音与批次设置"><header className={styles.settingsHead}><h2>声音与输出</h2><button className={styles.iconButton} aria-label="收起设置" onClick={props.onClose}><Icon name="close"/></button></header><div className={styles.scopeTabs} aria-label="设置范围"><button aria-pressed={props.scope==='batch'} onClick={()=>props.setScope('batch')}>整个批次</button><button aria-pressed={props.scope==='call'} onClick={()=>props.setScope('call')} disabled={!ctx.current}>当前通话</button></div><div className={styles.settingsBody}>{props.scope==='call'?<CallSettings ctx={ctx}/>:<BatchSettings ctx={ctx}/>}<OutputSettings ctx={ctx}/>{ctx.disabled&&ctx.workspace&&<p className={styles.quiet}>{ctx.workspace.input_folder.valid===false?'恢复文件夹访问后可调整声音与输出。':ctx.workspace.has_run_plan?'当前生成计划已固定。结束任务后可调整。':'扫描或操作完成后可调整设置。'}</p>}</div></aside>;
 }
