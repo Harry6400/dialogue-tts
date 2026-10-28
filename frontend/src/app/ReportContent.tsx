@@ -15,6 +15,7 @@ function ExportActions({reports}: {reports: WorkspaceReportController}) {
   return <div className={styles.actions}><button className={styles.primary} disabled={reports.busy || !reports.canCreate || reports.creationUnknown} onClick={() => void reports.createAndSave()}><Icon name="download"/>{reports.state === 'creating' ? '正在创建…' : '导出并选择保存位置'}</button></div>;
 }
 export function ReportContent({reports, workspaceId, cleanupOnly = false}: Props) {
+  const showRecovery = cleanupOnly || reports.creationUnknown || !reports.manifest && (reports.state === 'error' || !reports.canCreate);
   return <div className={styles.content}>
     {!cleanupOnly && <>
       <div className={styles.scope}><Icon name="file"/><div><strong>导出整个批次</strong><p>包含每份 XML 的文件名、识别角色、结果名称、状态与异常原因，每份 XML 一行。</p></div></div>
@@ -24,12 +25,12 @@ export function ReportContent({reports, workspaceId, cleanupOnly = false}: Props
       <ReportFeedback reports={reports}/>
       <ExportActions reports={reports}/>
     </>}
-    <section className={cleanupOnly ? styles.recoveryOnly : styles.recovery} aria-label="临时 CSV 清单">
+    {showRecovery && <section className={cleanupOnly ? styles.recoveryOnly : styles.recovery} aria-label="临时 CSV 清单">
       <h3>临时 CSV 清单</h3>
       <p>刷新后找不到待保存清单，或提示清单数量已达上限时，可取消本次应用会话的临时 CSV，再重新导出。</p>
       <p className={styles.hint}>仅清理临时 CSV 快照；任务、原始 XML、MP3 和已保存的 CSV 均保留。</p>
       {cleanupOnly && <ReportFeedback reports={reports}/>}
       <button className={styles.cleanup} disabled={reports.busy} onClick={() => void reports.cancelPending()}>取消未保存的临时 CSV 清单</button>
-    </section>
+    </section>}
   </div>;
 }

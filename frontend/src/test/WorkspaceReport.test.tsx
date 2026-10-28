@@ -33,6 +33,7 @@ it('explains whole-batch scope and discards only after a matching native save re
   expect(screen.getByText(/不受当前搜索、筛选或勾选范围影响/)).toBeVisible();
   expect(screen.getByText(/每份 XML 一行/)).toBeVisible();
   expect(screen.getByText(/不包含对话正文或完整私人路径/)).toBeVisible();
+  expect(screen.queryByRole('button', {name: '取消未保存的临时 CSV 清单'})).not.toBeInTheDocument();
   exportNow();
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已保存并核验 我选择的清单.csv'));
   expect(create).toHaveBeenCalledExactlyOnceWith(workspaceId);
