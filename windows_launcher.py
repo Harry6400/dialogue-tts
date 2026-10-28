@@ -444,7 +444,7 @@ $b.Save($args[1],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()
             try:
                 deadline = time.monotonic() + 25
                 while time.monotonic() < deadline:
-                    ready = window.evaluate_js("!!document.querySelector('[data-testid=workspace-ready]') && !!document.querySelector('[data-testid=app-shell]')")
+                    ready = window.evaluate_js("!!document.querySelector('[data-testid=workspace-ready]') && !!document.querySelector('[data-testid=app-shell]') && ['light','dark'].includes(document.documentElement.dataset.theme)")
                     if ready: break
                     time.sleep(.2)
                 if not ready: raise RuntimeError('Native React workspace did not become ready')
