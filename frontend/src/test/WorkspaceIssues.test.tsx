@@ -50,58 +50,78 @@ function server(patch: Partial<WorkspaceSummary> = {}) {
 }
 afterEach(() => vi.unstubAllGlobals());
 
+// Each mode keeps its own bounded table mounted. Scope text lookups to the
+// active table so JSDOM need not recompute every row's accessibility tree for
+// each async retry; still verify the located control's accessible name.
+function activeTable() {return screen.getByRole('table', {name: '通话列表'});}
+async function findCall(name: string) {
+  const table = await screen.findByRole('table', {name: '通话列表'});
+  const button = await within(table).findByText(name, {selector: 'button'});
+  expect(button).toBeVisible(); expect(button).toHaveAccessibleName(name);
+  return button;
+}
+function call(name: string) {return within(activeTable()).getByText(name, {selector: 'button'});}
+function pageControl(name: string) {return within(activeTable().parentElement!.parentElement!).getByLabelText(name, {selector: 'button'});}
+function issuePanel() {return screen.getByRole('region', {name: '问题分类'});}
+function issueControl(name: string) {return within(issuePanel()).getByRole('button', {name});}
+function statusFilter() {return within(screen.getByLabelText('通话状态筛选')).getByRole('button', {name: /^需处理/});}
+function footerControl(name: string) {return within(screen.getByTestId('consent').closest('footer')!).getByRole('button', {name});}
+
 it('uses global reason counts while pages and selection requests retain the chosen issue scope', async () => {
   const backend = server(); render(<App/>);
-  await screen.findByRole('button', {name: '000001.mp3'});
-  fireEvent.click(screen.getByRole('button', {name: /^需处理/}));
+  await findCall('000001.mp3');
+  fireEvent.click(statusFilter());
   const panel = screen.getByRole('region', {name: '问题分类'});
   expect(within(panel).getByText('本批次 211 通')).toBeVisible();
   fireEvent.click(within(panel).getByRole('button', {name: '筛选输入文件，205 通'}));
-  await screen.findByRole('button', {name: '100099.mp3'});
+  await findCall('100099.mp3');
+  expect(activeTable().querySelectorAll('tbody tr')).toHaveLength(100);
   expect(document.querySelectorAll('tbody tr').length).toBeLessThanOrEqual(200);
   expect(screen.getByText('已选 2 通，其中 2 通不在当前筛选')).toBeVisible();
-  fireEvent.click(screen.getByRole('button', {name: '下一页'}));
-  await screen.findByRole('button', {name: '100199.mp3'});
+  fireEvent.click(pageControl('下一页'));
+  await findCall('100199.mp3');
   expect(within(panel).getByRole('button', {name: '筛选输入文件，205 通'})).toHaveAttribute('aria-pressed', 'true');
   const pageRequest = backend.calls.filter(call => call.url.pathname === '/api/workspaces/issues-workspace').at(-1)!;
   expect(Object.fromEntries(pageRequest.url.searchParams)).toMatchObject({filter: 'error', issue: 'input', page: '2', limit: '100'});
-  fireEvent.click(screen.getByRole('button', {name: '清空选择'}));
+  fireEvent.click(screen.getByText('清空选择', {selector: 'button'}));
   await waitFor(() => expect(backend.calls.some(call => call.url.pathname.endsWith('/selection'))).toBe(true));
   expect(backend.calls.find(call => call.url.pathname.endsWith('/selection'))?.body).toEqual({mode: 'clear', q: '', filter: 'error', issue: 'input'});
   expect(JSON.stringify(backend.calls.map(call => call.body))).not.toContain('item_ids');
 });
 
 it('loads the server-reported next page and focuses that problem, including wraparound', async () => {
-  const backend = server(); render(<App/>); await screen.findByRole('button', {name: '000001.mp3'});
-  fireEvent.click(screen.getByRole('button', {name: /^需处理/}));
-  fireEvent.click(screen.getByRole('button', {name: '筛选输入文件，205 通'}));
-  await screen.findByRole('button', {name: '100099.mp3'});
-  fireEvent.click(screen.getByRole('button', {name: '下一页'}));
-  fireEvent.click(await screen.findByRole('button', {name: '100199.mp3'}));
-  fireEvent.click(screen.getByRole('button', {name: '下一问题'}));
-  const next = await screen.findByRole('button', {name: '100200.mp3'});
+  const backend = server(); render(<App/>); await findCall('000001.mp3');
+  fireEvent.click(statusFilter());
+  fireEvent.click(issueControl('筛选输入文件，205 通'));
+  await findCall('100099.mp3');
+  fireEvent.click(pageControl('下一页'));
+  fireEvent.click(await findCall('100199.mp3'));
+  fireEvent.click(issueControl('下一问题'));
+  const next = await findCall('100200.mp3');
   await waitFor(() => expect(next).toHaveFocus());
+  expect(activeTable().querySelectorAll('tbody tr')).toHaveLength(5);
   const request = backend.calls.find(call => call.url.pathname.endsWith('/next-issue'))!;
   expect(Object.fromEntries(request.url.searchParams)).toEqual({q: '', issue: 'input', limit: '100', after_id: 'input-199'});
   expect(backend.calls.filter(call => call.url.pathname === '/api/workspaces/issues-workspace').at(-1)?.url.searchParams.get('page')).toBe('3');
-  fireEvent.click(screen.getByRole('button', {name: '100204.mp3'})); fireEvent.click(screen.getByRole('button', {name: '下一问题'}));
-  const wrapped = await screen.findByRole('button', {name: '100000.mp3'});
+  fireEvent.click(call('100204.mp3')); fireEvent.click(issueControl('下一问题'));
+  const wrapped = await findCall('100000.mp3');
   await waitFor(() => expect(wrapped).toHaveFocus());
-  expect(screen.getByRole('status')).toHaveTextContent('已回到当前筛选的第一个问题');
+  expect(activeTable().querySelectorAll('tbody tr')).toHaveLength(100);
+  expect(within(issuePanel()).getByRole('status')).toHaveTextContent('已回到当前筛选的第一个问题');
 });
 
 it('ignores a next-problem reply after its category has changed', async () => {
   const backend = server(); let resolve!: (value: NextIssue) => void;
   backend.setNext(() => new Promise(done => {resolve = done;}));
-  render(<App/>); await screen.findByRole('button', {name: '000001.mp3'});
-  fireEvent.click(screen.getByRole('button', {name: /^需处理/})); fireEvent.click(screen.getByRole('button', {name: '筛选输入文件，205 通'}));
-  await screen.findByRole('button', {name: '100099.mp3'});
-  fireEvent.click(screen.getByRole('button', {name: '下一问题'}));
-  fireEvent.click(screen.getByRole('button', {name: '筛选保存异常，1 通'}));
-  await screen.findByRole('button', {name: '900005.mp3'});
+  render(<App/>); await findCall('000001.mp3');
+  fireEvent.click(statusFilter()); fireEvent.click(issueControl('筛选输入文件，205 通'));
+  await findCall('100099.mp3');
+  fireEvent.click(issueControl('下一问题'));
+  fireEvent.click(issueControl('筛选保存异常，1 通'));
+  await findCall('900005.mp3');
   await act(async () => resolve({item_id: 'input-200', page: 3, page_size: 100, wrapped: false, matched_total: 205, filter: 'error', issue: 'input'}));
-  expect(screen.getByRole('button', {name: '筛选保存异常，1 通'})).toHaveAttribute('aria-pressed', 'true');
-  expect(screen.queryByRole('button', {name: '100200.mp3'})).not.toBeInTheDocument();
+  expect(issueControl('筛选保存异常，1 通')).toHaveAttribute('aria-pressed', 'true');
+  expect(within(activeTable()).queryByText('100200.mp3', {selector: 'button'})).not.toBeInTheDocument();
   const preview = screen.getByRole('region', {name: '通话快速预览'});
   expect(within(preview).getByText(/检查输出目录权限与可用空间/)).toBeVisible();
 });
@@ -111,17 +131,17 @@ it('keeps pending audio outside issue categories and retries saving without sour
   render(<App/>);
   expect(await screen.findByTestId('pending-audio')).toHaveTextContent('2 通完整音频待保存');
   expect(screen.getByTestId('consent')).not.toBeChecked();
-  const retry = screen.getByRole('button', {name: '重试保存'}); expect(retry).toBeEnabled(); fireEvent.click(retry);
+  const retry = footerControl('重试保存'); expect(retry).toBeEnabled(); fireEvent.click(retry);
   await waitFor(() => expect(backend.calls.some(call => call.url.pathname.endsWith('/retry'))).toBe(true));
   expect(backend.calls.find(call => call.url.pathname.endsWith('/retry'))?.body).toEqual({kind: 'save'});
   expect(backend.calls.some(call => /\/(start|resume|audition)$/.test(call.url.pathname))).toBe(false);
 });
 
 it('uses eligible selected count for generation and preserves explicit consent for synthesis retry', async () => {
-  const backend = server(); render(<App/>); await screen.findByRole('button', {name: '000001.mp3'});
+  const backend = server(); render(<App/>); await findCall('000001.mp3');
   expect(screen.getByTestId('generate')).toHaveTextContent('生成 1 通');
   expect(screen.getByText('已选 2 通 · 可生成 1 通')).toBeVisible();
-  expect(screen.getByRole('button', {name: '重试合成'})).toBeDisabled();
-  fireEvent.click(screen.getByTestId('consent')); fireEvent.click(screen.getByRole('button', {name: '重试合成'}));
+  expect(footerControl('重试合成')).toBeDisabled();
+  fireEvent.click(screen.getByTestId('consent')); fireEvent.click(footerControl('重试合成'));
   await waitFor(() => expect(backend.calls.find(call => call.url.pathname.endsWith('/retry'))?.body).toEqual({kind: 'synthesis', consent: true}));
 });
