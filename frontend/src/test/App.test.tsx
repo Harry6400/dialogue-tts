@@ -504,7 +504,9 @@ it('blocks updates for a retained legacy audio capture while leaving close confi
 });
 
 it('moves routine notes into call information but keeps actual warnings visible',async()=>{
-  server();render(<App/>);fireEvent.click(await screen.findByRole('button',{name:'正文核对'}));
+  server();render(<App/>);await screen.findByTestId('workspace-ready');await screen.findByRole('button',{name:'000123.mp3'});
+  fireEvent.click(screen.getByRole('button',{name:'正文核对'}));
+  expect(await screen.findByText('虚构会议室预约。')).toBeVisible();
   expect(await screen.findByText('两份来源开始时间不一致。')).toBeVisible();
   expect(screen.getByText('跳过 1 段静音')).toBeVisible();
   expect(screen.queryByText('按毫秒排序，不还原原始时长。')).not.toBeInTheDocument();
