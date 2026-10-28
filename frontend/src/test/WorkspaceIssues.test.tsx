@@ -53,16 +53,20 @@ afterEach(() => vi.unstubAllGlobals());
 // Each mode keeps its own bounded table mounted. Scope text lookups to the
 // active table so JSDOM need not recompute every row's accessibility tree for
 // each async retry; still verify the located control's accessible name.
-function activeTable() {return screen.getByRole('table', {name: '通话列表'});}
+function activeTable() {
+  const table = Array.from(document.querySelectorAll<HTMLTableElement>('table[aria-label="通话列表"]')).find(table => !table.closest('[hidden]'));
+  if (!table) throw new Error('Active call table is not mounted');
+  expect(table).toHaveRole('table'); expect(table).toHaveAccessibleName('通话列表');
+  return table;
+}
 async function findCall(name: string) {
-  const table = await screen.findByRole('table', {name: '通话列表'});
-  const button = await within(table).findByText(name, {selector: 'button'});
+  const button = await waitFor(() => within(activeTable()).getByText(name, {selector: 'button'}));
   expect(button).toBeVisible(); expect(button).toHaveAccessibleName(name);
   return button;
 }
 function call(name: string) {return within(activeTable()).getByText(name, {selector: 'button'});}
 function pageControl(name: string) {return within(activeTable().parentElement!.parentElement!).getByLabelText(name, {selector: 'button'});}
-function issuePanel() {return screen.getByRole('region', {name: '问题分类'});}
+function issuePanel() {return screen.getByLabelText('问题分类');}
 function issueControl(name: string) {return within(issuePanel()).getByRole('button', {name});}
 function statusFilter() {return within(screen.getByLabelText('通话状态筛选')).getByRole('button', {name: /^需处理/});}
 function footerControl(name: string) {return within(document.querySelector('footer')!).getByRole('button', {name});}
@@ -71,7 +75,7 @@ it('uses global reason counts while pages and selection requests retain the chos
   const backend = server(); render(<App/>);
   await findCall('000001.mp3');
   fireEvent.click(statusFilter());
-  const panel = screen.getByRole('region', {name: '问题分类'});
+  const panel = issuePanel();
   expect(within(panel).getByText('本批次 211 通')).toBeVisible();
   fireEvent.click(within(panel).getByRole('button', {name: '筛选输入文件，205 通'}));
   await findCall('100099.mp3');
@@ -83,7 +87,7 @@ it('uses global reason counts while pages and selection requests retain the chos
   expect(within(panel).getByRole('button', {name: '筛选输入文件，205 通'})).toHaveAttribute('aria-pressed', 'true');
   const pageRequest = backend.calls.filter(call => call.url.pathname === '/api/workspaces/issues-workspace').at(-1)!;
   expect(Object.fromEntries(pageRequest.url.searchParams)).toMatchObject({filter: 'error', issue: 'input', page: '2', limit: '100'});
-  fireEvent.click(screen.getByRole('button', {name: '清空选择'}));
+  fireEvent.click(within(screen.getByLabelText('通话选择操作')).getByRole('button', {name: '清空选择'}));
   await waitFor(() => expect(backend.calls.some(call => call.url.pathname.endsWith('/selection'))).toBe(true));
   expect(backend.calls.find(call => call.url.pathname.endsWith('/selection'))?.body).toEqual({mode: 'clear', q: '', filter: 'error', issue: 'input'});
   expect(JSON.stringify(backend.calls.map(call => call.body))).not.toContain('item_ids');
