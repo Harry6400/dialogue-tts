@@ -55,7 +55,7 @@ export function useWorkbench(model: WorkspaceModel) {
     // This page has no legacy temporary results. Native code checks persistent
     // workspace caches separately; unknown task/save state still blocks close.
     host.dialogueCloseSafety = () => ({busy: busy || running || (model.safety?.busy ?? true), pending: busy || (model.safety?.pending ?? true), running: running || auditionRunning || (model.safety?.busy ?? true), saving: model.safety?.saving ?? true, unsaved: false, persistent_workspace: true});
-    host.dialogueUpdateSafety = () => ({busy: updateSafetyBusy || running || auditionRunning || (model.safety?.busy ?? true) || (model.safety?.pending ?? true), unsaved: model.safety?.unsaved ?? true, saving: model.safety?.saving ?? true, persistent_workspace: true});
+    host.dialogueUpdateSafety = () => ({busy: updateSafetyBusy || running || auditionRunning || (model.safety?.busy ?? true) || (model.safety?.pending ?? true), unsaved: model.safety ? model.safety.unsaved || model.safety.legacy_unsaved === true : true, saving: model.safety?.saving ?? true, persistent_workspace: true});
     host.dialogueShowUnsaved = () => {model.setFilter('error'); setMode('overview');};
     host.dialogueUpdateLock = setUpdateLocked;
     return () => {host.dialogueCloseSafety = originals.close; host.dialogueUpdateSafety = originals.update; host.dialogueShowUnsaved = originals.show; host.dialogueUpdateLock = originals.lock;};

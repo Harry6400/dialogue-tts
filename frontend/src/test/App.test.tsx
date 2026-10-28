@@ -3,7 +3,7 @@ import {act, fireEvent, render, screen, waitFor,within} from '@testing-library/r
 import {afterEach, expect, it, vi} from 'vitest';
 import {App} from '../app/App';
 import type {NativeHost} from '../services/native';
-import type {WorkspaceItem, WorkspaceSummary} from '../types/contracts';
+import type {WorkspaceItem, WorkspaceSafety, WorkspaceSummary} from '../types/contracts';
 
 const settings = {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', USER: 'zh-CN-XiaoyiNeural'}, rate: 1, pause_ms: 250, auto_voice: true, manual_user_voice: false} as const;
 const item: WorkspaceItem = {id: 'item-one', filename: '000123.mp3', status: 'ready', selected: false, customer_voice: 'zh-CN-XiaoyiNeural', voice_source: '称呼未判定'};
@@ -12,7 +12,7 @@ function summary(patch: Partial<WorkspaceSummary> = {}): WorkspaceSummary {retur
 function server(initial: WorkspaceSummary | null = summary(), matchEvidence=false, initialItem: Partial<WorkspaceItem> = {}) {
   let workspace = initial;
   let currentItem = {...item, ...initialItem};
-  let globalSafety={busy:false,unsaved:false,saving:false,pending:false};
+  let globalSafety: WorkspaceSafety={busy:false,unsaved:false,saving:false,pending:false};
   const calls: {path: string; body: Record<string, unknown> | undefined}[] = [];
   const transport = vi.fn<typeof fetch>(async (path, options) => {
     const url = String(path);
@@ -383,4 +383,12 @@ it('changes only application theme and reverts visual state on a failed preferen
   expect(theme.mock.calls).toEqual([[{theme: 'dark'}], [{theme: 'light'}]]);
   expect(legacy).not.toHaveBeenCalled();
   expect(backend.calls.some(call => call.path.endsWith('/settings'))).toBe(false);
+});
+
+it('blocks updates for a retained legacy audio capture while leaving close confirmation to native safety', async () => {
+  const backend = server(); backend.setSafety({busy: false, unsaved: false, saving: false, pending: false, legacy_unsaved: true});
+  render(<App/>); await screen.findByTestId('workspace-ready');
+  const host = window as Window & {dialogueUpdateSafety?: () => {unsaved: boolean}; dialogueCloseSafety?: () => {unsaved: boolean}};
+  await waitFor(() => expect(host.dialogueUpdateSafety?.().unsaved).toBe(true));
+  expect(host.dialogueCloseSafety?.().unsaved).toBe(false);
 });

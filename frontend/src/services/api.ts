@@ -49,7 +49,11 @@ export class ApiClient {
   cancelBatch(id: string) {return this.request<BatchSnapshot>('/api/batches/' + this.id(id) + '/cancel', {});}
   retryBatch(id: string, consent: true) {return this.request<BatchSnapshot>('/api/batches/' + this.id(id) + '/retry', {consent});}
   listWorkspaces() {return this.request<{workspaces: WorkspaceSummary[]}>('/api/workspaces');}
-  getWorkspaceSafety() {return this.request<WorkspaceSafety>('/api/workspaces/safety');}
+  async getWorkspaceSafety() {
+    const state = await this.request<WorkspaceSafety & {unknown?: unknown}>('/api/workspaces/safety');
+    if (!state || typeof state !== 'object' || ['busy', 'unsaved', 'saving', 'pending'].some(key => typeof state[key as keyof WorkspaceSafety] !== 'boolean') || state.legacy_unsaved !== undefined && typeof state.legacy_unsaved !== 'boolean' || state.unknown === true) throw new ApiError('无法确认任务与保存状态，请重新核验。', null);
+    return state;
+  }
   importWorkspace(inputFolderId: string) {return this.request<WorkspaceSummary>('/api/workspaces/import', {input_folder_id: inputFolderId});}
   getWorkspace(id: string, query: WorkspaceQuery) {
     const params = new URLSearchParams({q: query.q, filter: query.filter, issue: query.issue || '', page: String(query.page), limit: String(query.limit || 100), sort: 'filename'});

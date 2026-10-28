@@ -36,7 +36,7 @@ export interface WorkspaceItem {id: string; filename?: string; source_name?: str
 export interface WorkspaceSummary {id: string; status: WorkspaceStatus; phase: string; revision: number; discovered: number; scanned: number; total: number; ready: number; error: number; issues: WorkspaceIssues; saved: number; selected: number; ready_selected: number; selection_query: SelectionQuery; processed: number; input_folder: Folder; output_folder?: Folder | null; settings: SoundSettings; active_item?: WorkspaceItem | null; message?: string; selection_id?: string; selection_hidden_count?: number; can_edit?: boolean; has_run_plan?: boolean; save_error?: number; save_pending: number; synthesis_error?: number; has_unsaved_audio?: boolean; counts?: Partial<Record<ItemStatus, number>>}
 export interface WorkspacePage extends WorkspaceSummary {items: WorkspaceItem[]; matched_total: number; page: number; page_size: number; issue: WorkspaceIssue}
 export interface WorkspaceSnapshot extends WorkspaceSummary {items: WorkspaceItem[]; reset: boolean}
-export interface WorkspaceSafety {busy: boolean; unsaved: boolean; saving: boolean; pending: boolean}
+export interface WorkspaceSafety {busy: boolean; unsaved: boolean; saving: boolean; pending: boolean; legacy_unsaved?: boolean}
 export interface WorkspaceDetail extends Preview {item: WorkspaceItem; workspace_id: string; result_settings_changed?: boolean}
 export interface WorkspaceQuery {q: string; filter: WorkspaceFilter; issue?: WorkspaceIssue; page: number; limit?: number}
 export interface NextIssue {item_id: string | null; page: number; page_size: 100; wrapped: boolean; matched_total: number; filter: 'error'; issue: WorkspaceIssue}

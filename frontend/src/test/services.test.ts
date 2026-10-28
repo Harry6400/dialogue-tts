@@ -4,6 +4,10 @@ import {createNativeBridge, type NativeHost} from '../services/native';
 afterEach(() => vi.useRealTimers());
 
 describe('HTTP contract', () => {
+  it.each([null, {busy: 0, unsaved: false, saving: false, pending: false}, {busy: false, unsaved: false, saving: false}, {busy: false, unsaved: false, saving: false, pending: false, legacy_unsaved: 'unknown'}, {busy: false, unsaved: false, saving: false, pending: false, unknown: true}])('rejects malformed or unknown safety state %o', async state => {
+    const client = new ApiClient(vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(state))));
+    await expect(client.getWorkspaceSafety()).rejects.toMatchObject({message: '无法确认任务与保存状态，请重新核验。'});
+  });
   it('creates whole-workspace CSV snapshots and cancels only report resources with empty bodies', async () => {
     const transport = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({token: 'test-session', voices: []}))).mockImplementation(async () => new Response(JSON.stringify({ok: true})));
     const client = new ApiClient(transport); const id = 'a'.repeat(32);
