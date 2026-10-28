@@ -1,3 +1,4 @@
+import {WorkspacePagination} from './WorkspacePagination';
 import {useEffect, useRef} from 'react';
 import {canEdit, type WorkspaceModel} from './useWorkspace';
 import {Icon} from './Icon';
@@ -14,12 +15,12 @@ function emptyCopy(model: WorkspaceModel) {
   if(model.filter==='error')return {message:'当前没有需要处理的问题',hint:'可返回全部通话继续查看。',clear:true};
   return {message:'没有符合条件的通话',hint:'可调整状态筛选，或尝试其他通话编号。',clear:true};
 }
-function EmptyList({model,onClearFilters}: {model:WorkspaceModel;onClearFilters:()=>void}) {
+export function WorkspaceEmptyState({model,onClearFilters}: {model:WorkspaceModel;onClearFilters:()=>void}) {
   const copy=emptyCopy(model);
   return <div className={styles.listEmpty}><Icon name={model.loading?'refresh':'search'}/><p>{copy.message}</p>{copy.hint&&<span className={styles.emptyHint}>{copy.hint}</span>}{copy.clear&&<button className={styles.textButton} onClick={onClearFilters}>清除筛选</button>}</div>;
 }
 
-export function WorkspaceTable({model, onReview, context = 'overview', active = true, onClearFilters}: {model: WorkspaceModel; onReview: () => void; context?: string; active?: boolean; onClearFilters: () => void}) {
+export function WorkspaceTable({model, onReview, context = 'overview', active = true, onClearFilters, onActivate}: {model: WorkspaceModel; onReview: () => void; context?: string; active?: boolean; onClearFilters: () => void; onActivate?: () => void}) {
   const {items, workspace, pending, activeId, matchedTotal, page} = model;
   const checkbox = useRef<HTMLInputElement>(null);
   const eligible = items.filter(selectable);
@@ -35,7 +36,6 @@ export function WorkspaceTable({model, onReview, context = 'overview', active = 
     consumeIssueFocus();
   }, [active, issueFocus, context, consumeIssueFocus]);
   const voices = new Map(model.config?.voices.map(voice => [voice.id, voice.label]));
-  const pages = Math.max(1, Math.ceil(matchedTotal / 100));
   function move(index: number, direction: number) {
     const next = items[Math.max(0, Math.min(items.length - 1, index + direction))];
     if (!next) return;
@@ -49,7 +49,7 @@ export function WorkspaceTable({model, onReview, context = 'overview', active = 
         <thead><tr><th className={styles.checkCell}><input ref={checkbox} type="checkbox" aria-label="选择当前页可生成通话" checked={allChecked} disabled={!eligible.length || !!pending || !canEdit(workspace)} onChange={event => void model.select({mode: 'page', item_ids: eligible.map(item => item.id), selected: event.target.checked})}/></th><th>输出文件</th><th className={styles.segmentColumn}>段数</th><th className={styles.voiceColumn}>客户声音</th><th>状态</th><th><span className={styles.srOnly}>操作</span></th></tr></thead>
         <tbody>{items.map((item, index) => <tr key={item.id} className={activeId === item.id ? styles.activeRow : ''}>
           <td className={styles.checkCell}><input type="checkbox" aria-label={'选择 ' + itemTitle(item)} checked={item.selected} disabled={!selectable(item) || !!pending || !canEdit(workspace)} onChange={event => void model.select({mode: 'toggle', item_id: item.id, selected: event.target.checked})}/></td>
-          <td><button id={context + '-call-' + item.id} className={styles.fileButton} onClick={() => model.setActiveId(item.id)} onDoubleClick={onReview} onKeyDown={event => {
+          <td><button id={context + '-call-' + item.id} className={styles.fileButton} onClick={() => {model.setActiveId(item.id); onActivate?.();}} onDoubleClick={onReview} onKeyDown={event => {
             if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {event.preventDefault(); move(index, event.key === 'ArrowDown' ? 1 : -1);}
             if (event.key === 'Enter') {event.preventDefault(); model.setActiveId(item.id); onReview();}
           }} aria-pressed={activeId === item.id}>{itemTitle(item)}</button>{item.error && <span className={styles.rowError} title={item.error}>{item.error}</span>}</td>
@@ -59,8 +59,9 @@ export function WorkspaceTable({model, onReview, context = 'overview', active = 
           <td><button className={styles.iconButton} aria-label={'核对 ' + (item.filename || item.id)} onClick={() => {model.setActiveId(item.id); onReview();}}><Icon name="arrow"/></button></td>
         </tr>)}</tbody>
       </table>
-      {!items.length && <EmptyList model={model} onClearFilters={onClearFilters}/>}
+      {!items.length && <WorkspaceEmptyState model={model} onClearFilters={onClearFilters}/>}
     </div>
-    <div className={styles.pagination}><span>{count(matchedTotal)} 通{model.loading ? ' · 更新中' : ''}</span><div><button className={styles.iconButton} aria-label="上一页" disabled={page <= 1 || model.loading} onClick={() => model.setPage(page - 1)}><Icon name="back"/></button><span>{page} / {pages}</span><button className={styles.iconButton} aria-label="下一页" disabled={page >= pages || model.loading} onClick={() => model.setPage(page + 1)}><Icon name="arrow"/></button></div></div>
+    <WorkspacePagination page={page} total={matchedTotal} loading={model.loading} onPage={model.setPage} compact={context==='review'}/>
+
   </>;
 }

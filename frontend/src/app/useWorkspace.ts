@@ -39,6 +39,7 @@ export function useWorkspace() {
   useEffect(() => {workspaceRef.current = workspace;}, [workspace]);
   const workspaceId = workspace?.id;
   const viewRef = useRef({workspaceId, query, filter, issue});
+  const adjacentTarget = useRef<{workspaceId:string;query:string;filter:WorkspaceFilter;issue:WorkspaceIssue;page:number;edge:'first'|'last'} | null>(null);
   const nextIssueTarget = useRef<{workspaceId: string; query: string; issue: WorkspaceIssue; itemId: string; page: number} | null>(null);
   useEffect(() => {viewRef.current = {workspaceId, query, filter, issue};}, [workspaceId, query, filter, issue]);
 
@@ -90,9 +91,14 @@ export function useWorkspace() {
         setHiddenSelection(result.selection_hidden_count || 0);
         const target = nextIssueTarget.current;
         const targetedPage = target && target.workspaceId === workspaceId && target.query === query && target.issue === issue && target.page === page ? target : null;
+        const adjacent = adjacentTarget.current;
+        const adjacentPage = adjacent && adjacent.workspaceId===workspaceId && adjacent.query===query && adjacent.filter===filter && adjacent.issue===issue && adjacent.page===page ? adjacent : null;
+        const adjacentItem = adjacentPage?.edge==='last' ? result.items[result.items.length-1] : adjacentPage ? result.items[0] : undefined;
         const located = targetedPage && result.items.some(item => item.id === targetedPage.itemId);
         if (located) {setActiveId(targetedPage.itemId); setIssueFocus(targetedPage.itemId);}
+        else if (adjacentItem) setActiveId(adjacentItem.id);
         else setActiveId(current => result.items.some(item => item.id === current) ? current : result.items.find(item => item.status === 'ready')?.id || result.items[0]?.id || null);
+        if (adjacentPage) adjacentTarget.current = null;
         if (targetedPage) {nextIssueTarget.current = null; if (!located) setIssueNotice('列表已更新，可继续定位下一问题。');}
       } catch (issue) {if (alive) setError(messageOf(issue));}
       finally {if (alive) setLoading(false);}
@@ -136,6 +142,17 @@ export function useWorkspace() {
     }
     void load(); return () => {alive = false;};
   }, [api, workspaceId, activeId, detailRevision]);
+
+  function navigateCall(direction: -1 | 1) {
+    if (!workspaceId || loading) return;
+    const index=items.findIndex(item=>item.id===activeId);
+    const next=items[index+direction];
+    if (next) {setActiveId(next.id); return;}
+    const targetPage=page+direction;
+    if (targetPage<1 || targetPage>Math.ceil(matchedTotal/100)) return;
+    adjacentTarget.current={workspaceId,query,filter,issue,page:targetPage,edge:direction===1?'first':'last'};
+    setPage(targetPage);
+  }
 
   async function perform(context: Operation, operation: () => Promise<void>) {
     if (pendingRef.current) return;
@@ -229,7 +246,7 @@ export function useWorkspace() {
   const changeFilter = useCallback((value: WorkspaceFilter) => {setFilter(value); setIssue(''); setPage(1); setIssueNotice(''); setIssueFocus(null); nextIssueTarget.current = null;}, []);
   const changeIssue = useCallback((value: WorkspaceIssue) => {setFilter('error'); setIssue(value); setPage(1); setIssueNotice(''); setIssueFocus(null); nextIssueTarget.current = null;}, []);
   const consumeIssueFocus = useCallback(() => setIssueFocus(null), []);
-  return {api, native, config, preferences, workspaces, workspace, items, matchedTotal, query, filter, issue, issueNotice, issueFocus, page, activeId, detail, detailLoading, loading, error, pending, safety, hiddenSelection, output: workspace ? workspace.output_folder || null : output, accept, refresh, perform, nativeValue, mutate, importFolder, chooseOutput, restoreAccess, replaceInput, select, chooseWorkspace, nextIssue, consumeIssueFocus, setError, setActiveId, setQuery: changeQuery, setFilter: changeFilter, setIssue: changeIssue, setPage};
+  return {api, native, config, preferences, workspaces, workspace, items, matchedTotal, query, filter, issue, issueNotice, issueFocus, page, activeId, detail, detailLoading, loading, error, pending, safety, hiddenSelection, output: workspace ? workspace.output_folder || null : output, navigateCall, accept, refresh, perform, nativeValue, mutate, importFolder, chooseOutput, restoreAccess, replaceInput, select, chooseWorkspace, nextIssue, consumeIssueFocus, setError, setActiveId, setQuery: changeQuery, setFilter: changeFilter, setIssue: changeIssue, setPage};
 }
 
 export type WorkspaceModel = ReturnType<typeof useWorkspace>;
