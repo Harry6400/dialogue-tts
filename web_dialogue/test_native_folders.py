@@ -17,9 +17,15 @@ class FolderTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
         self.input=self.root/'input';self.input.mkdir();self.output=self.root/'output';self.output.mkdir()
-        self.host=Host(self.root)
+        self._hosts=[]
+        def new_host():
+            host=Host(self.root);self._hosts.append(host);return host
+        self.new_host=new_host
+        self.host=self.new_host()
         self.inc=self.host._authorize(self.input,'input')['folder_id'];self.out=self.host._authorize(self.output,'output')['folder_id']
-    def tearDown(self):self.temp.cleanup()
+    def tearDown(self):
+        for host in reversed(self._hosts):host._close_folders()
+        self.temp.cleanup()
     def response(self, fp='a'*64):
         data=(Path(__file__).parent/'silence.mp3').read_bytes()
         r=io.BytesIO(data);r.headers=Message();r.headers['Content-Length']=str(len(data));r.headers['Content-Type']='audio/mpeg';r.headers['X-Dialogue-Fingerprint']=fp;r.headers['Content-Disposition']='attachment; filename="001.mp3"'
@@ -55,27 +61,27 @@ class FolderTests(unittest.TestCase):
             self.assertTrue(self.host.choose_input_directory()['cancelled'])
         self.assertTrue(self.host.set_preferences({'voices':{'AGENT':'zh-CN-YunxiNeural'},'rate':1.5,'pause_ms':500})['ok'])
         with patch.object(Host,'_scan',side_effect=AssertionError('must not scan')):
-            restored=Host(self.root).get_preferences()
+            restored=self.new_host().get_preferences()
         self.assertEqual(restored['rate'],1.5);self.assertTrue(restored['input_folder']['valid'])
         self.assertNotEqual(restored['input_folder']['folder_id'], selected['folder_id'])
         self.assertFalse(self.host.set_preferences({'paths':{'output':'C:/escape'}})['ok'])
     def test_legacy_nondefault_user_voice_becomes_manual(self):
         (self.root/'prefs.json').write_text(json.dumps({'version':1,'voices':{'USER':'zh-CN-YunxiNeural'},'rate':1.2,'pause_ms':400,'paths':{},'receipts':{},'exports':{}}))
-        restored=Host(self.root).get_preferences()
+        restored=self.new_host().get_preferences()
         self.assertEqual(restored['voices']['USER'],'zh-CN-YunxiNeural')
         self.assertTrue(restored['manual_user_voice']);self.assertFalse(restored['auto_voice'])
     def test_legacy_foreign_preferences_survive_read_but_new_foreign_writes_fail(self):
         voices={'AGENT':'en-US-JennyNeural','USER':'zh-CN-XiaoyiNeural'}
         (self.root/'prefs.json').write_text(json.dumps({'version':1,'voices':voices,'paths':{},'receipts':{},'exports':{}}))
-        self.assertEqual(Host(self.root).get_preferences()['voices'],voices)
+        self.assertEqual(self.new_host().get_preferences()['voices'],voices)
         self.assertFalse(self.host.set_preferences({'voices':voices})['ok'])
         self.assertFalse(self.host.set_preferences({'voices':{'USER':'https://evil/voice'}})['ok'])
-        self.assertEqual(Host(self.root).get_preferences()['voices'],voices)
+        self.assertEqual(self.new_host().get_preferences()['voices'],voices)
     def test_new_and_legacy_voices_persist(self):
         self.assertTrue(self.host.set_preferences({'voices': {'AGENT': 'zh-CN-YunxiaNeural', 'USER': 'zh-CN-YunyangNeural'}})['ok'])
-        self.assertEqual(Host(self.root).get_preferences()['voices'], {'AGENT': 'zh-CN-YunxiaNeural', 'USER': 'zh-CN-YunyangNeural'})
+        self.assertEqual(self.new_host().get_preferences()['voices'], {'AGENT': 'zh-CN-YunxiaNeural', 'USER': 'zh-CN-YunyangNeural'})
         self.assertTrue(self.host.set_preferences({'voices': {'AGENT': 'zh-CN-XiaoxiaoNeural', 'USER': 'zh-CN-XiaoyiNeural'}})['ok'])
-        self.assertEqual(Host(self.root).get_preferences()['voices']['USER'], 'zh-CN-XiaoyiNeural')
+        self.assertEqual(self.new_host().get_preferences()['voices']['USER'], 'zh-CN-XiaoyiNeural')
     def test_output_space_uses_capability_and_cleans_probe(self):
         result = self.host.check_output_space(self.out)
         self.assertTrue(result['ok'])
@@ -87,9 +93,9 @@ class FolderTests(unittest.TestCase):
     def test_theme_persists_and_rejects_invalid_values(self):
         self.assertEqual(self.host.get_preferences()['theme'], 'light')
         self.assertTrue(self.host.set_preferences({'theme': 'dark'})['ok'])
-        self.assertEqual(Host(self.root).get_preferences()['theme'], 'dark')
+        self.assertEqual(self.new_host().get_preferences()['theme'], 'dark')
         self.assertFalse(self.host.set_preferences({'theme': 'invalid'})['ok'])
-        self.assertEqual(Host(self.root).get_preferences()['theme'], 'dark')
+        self.assertEqual(self.new_host().get_preferences()['theme'], 'dark')
     def test_save_idempotent_collision_receipt_restart_delete_and_change(self):
         target=self.output/'001.mp3';target.write_bytes(b'unrelated')
         first=self.save();self.assertFalse(first['ok']);self.assertTrue(first['conflict'])
@@ -97,7 +103,7 @@ class FolderTests(unittest.TestCase):
         first=self.save();self.assertTrue(first['ok'],first);self.assertEqual(first['name'],'001.mp3')
         again=self.save();self.assertEqual(again['path'],first['path'])
         second=self.save('/api/jobs/'+'c'*32+'/audio');self.assertTrue(second['ok']);self.assertEqual(first['path'],second['path'])
-        restarted=Host(self.root);cap=restarted._authorize(self.output,'output')['folder_id']
+        restarted=self.new_host();cap=restarted._authorize(self.output,'output')['folder_id']
         names={'a'*64:'001.mp3'}
         self.assertEqual(len(restarted.check_completed(cap,['a'*64],names)['completed']),1)
         target.write_bytes(b'changed')

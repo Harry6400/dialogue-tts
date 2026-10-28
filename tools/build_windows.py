@@ -1,11 +1,13 @@
 """Build a self-contained Windows x64 app, then package only allowlisted files."""
 from pathlib import Path
+import argparse
 import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import zipfile
+from frontend_build import build_frontend, collect_frontend_licenses
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -22,12 +24,17 @@ def pyinstaller_command(source, out, work, version_resource):
                     '--exclude-module', 'PySide2', '--exclude-module', 'PySide6', '--exclude-module', 'cefpython3', '--collect-data', 'certifi',
                     '--collect-submodules', 'edge_tts', '--add-data', f'{source / "web_dialogue" / "index.html"};web_dialogue',
                     '--add-data', f'{source / "web_dialogue" / "silence.mp3"};web_dialogue',
+                    '--add-data', f'{source / "frontend" / "dist"};frontend/dist',
                     str(source / 'windows_launcher.py')]
 
 def main():
     if sys.platform != 'win32':
         raise SystemExit('Build the Windows binary on a Windows x64 runner.')
-    out = ROOT / 'dist'
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, default=ROOT / 'dist')
+    args = parser.parse_args()
+    out = args.output.resolve()
+    build_frontend()
     from windows_version_resource import write_resource
     version_resource = ROOT / 'build' / 'windows-version.txt'
     write_resource(version_resource)
@@ -52,6 +59,7 @@ def main():
     if (ROOT / 'third_party').is_dir():shutil.copytree(ROOT / 'third_party', stage / 'third_party', dirs_exist_ok=True)
     from collect_licenses import collect
     collect(stage / 'third_party' / 'bundled-runtime')
+    collect_frontend_licenses(stage / 'third_party' / 'bundled-runtime')
     from package_sources import export_sources
     export_sources(ROOT, stage / 'DialogueTTS-Source.zip')
     archive = out / 'DialogueTTS-Windows-x64.zip'

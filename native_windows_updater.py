@@ -3,6 +3,7 @@ import json, os, sys, threading
 from web_dialogue.safe_updater import UpdateError
 from web_dialogue.updater_bridge import Updater
 from web_dialogue.updater_cli import state_directory
+from native_close import workspace_safety
 
 class NativeUpdaterMixin:
     def _setup_updater(self, server):
@@ -27,9 +28,11 @@ class NativeUpdaterMixin:
             if not save_lock or not export_lock:raise UpdateError('正在保存文件，请完成后再更新')
             safety=self._window.evaluate_js('window.dialogueUpdateSafety()')
             if isinstance(safety,str):safety=json.loads(safety)
-            if not isinstance(safety,dict) or safety.get('busy') or safety.get('unsaved'):raise UpdateError('请先完成当前任务并保存所有音频结果，再更新')
+            if not isinstance(safety,dict) or any(type(safety.get(k)) is not bool for k in ('busy','unsaved')) or safety['busy'] or safety['unsaved']:raise UpdateError('请先完成当前任务并保存所有音频结果，再更新')
             server=self._update_server
             with server.update_lock:
+                backend=workspace_safety(server)
+                if backend is None or any(backend.values()):raise UpdateError('后台工作区仍有任务、保存或未保存音频，请先处理后再更新')
                 with server.jobs.lock,server.batches.lock:
                     if any(item['process'].poll() is None for item in server.jobs.items.values()) or server.batches.active:raise UpdateError('合成任务尚未结束')
                 server.update_in_progress=True;gated=True

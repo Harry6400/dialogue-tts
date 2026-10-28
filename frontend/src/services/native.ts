@@ -6,6 +6,9 @@ interface Methods {
   set_preferences: {args: PreferenceWrite; value: {ok: boolean; error?: string}};
   choose_input_directory: {args: Record<string, never>; value: Folder & {ok: true; files: {name: string; content: string}[]}};
   choose_output_directory: {args: Record<string, never>; value: Folder & {ok: true}};
+  choose_workspace_input: {args: Record<string, never>; value: Folder & {ok: true}};
+  choose_workspace_output: {args: Record<string, never>; value: Folder & {ok: true}};
+  restore_workspace_access: {args: {workspace_id: string}; value: {ok: true; input_folder: Folder; output_folder?: Folder | null}};
   refresh_input_directory: {args: {folder_id: string}; value: Folder & {ok: true; files: {name: string; content: string}[]}};
   check_output_space: {args: {folder_id: string}; value: {ok: true; writable: boolean; free_bytes: number | null}};
   check_completed: {args: {folder_id: string; fingerprints: string[]; expected_names?: Record<string, string>}; value: {ok: true; conflicts?: {fingerprint: string; name: string; error: string}[]; completed: Omit<SaveReceipt, 'ok'>[]}};
@@ -77,7 +80,7 @@ export function createNativeBridge(host: NativeHost = window as NativeHost) {
         const fn = host.pywebview?.api?.[method];
         if (!fn) return {kind: 'unsupported'};
         const values = args as Record<string, unknown>;
-        const positional = method === 'set_preferences' ? [args] : method === 'check_completed' ? [values.folder_id, values.fingerprints, values.expected_names] : method === 'save_to_output' ? [values.resource_path, values.folder_id] : method === 'save_download' ? [values.resource_path] : 'folder_id' in values ? [values.folder_id] : [];
+        const positional = method === 'set_preferences' ? [args] : method === 'restore_workspace_access' ? [values.workspace_id] : method === 'check_completed' ? [values.folder_id, values.fingerprints, values.expected_names] : method === 'save_to_output' ? [values.resource_path, values.folder_id] : method === 'save_download' ? [values.resource_path] : 'folder_id' in values ? [values.folder_id] : [];
         return normalize<Methods[M]['value']>(await fn(...positional));
       } catch {return {kind: 'unknown', message: '无法确认原生操作结果，请先核对状态。'};}
     },

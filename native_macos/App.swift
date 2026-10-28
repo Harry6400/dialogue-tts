@@ -3,11 +3,32 @@ import WebKit
 import UniformTypeIdentifiers
 import Darwin
 import CryptoKit
+import CoreFoundation
 
 // terminateLater runs a nested AppKit loop. Starting it inside a main-queue
 // block prevents the later main-queue reply from running until that block exits.
 func scheduleNativeTermination(_ action: @escaping () -> Void) {
     RunLoop.main.perform(inModes: [.default], block: action)
+}
+
+func mergeNativeCloseSafety(_ page: [String: Any]?, _ backend: [String: Any]?) -> [String: Any]? {
+    func boolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+    guard let page = page, let backend = backend,
+          let running = boolean(page["running"]), let saving = boolean(page["saving"]),
+          let pending = boolean(page["pending"]), let unsaved = boolean(page["unsaved"]),
+          let backendBusy = boolean(backend["busy"]), let backendSaving = boolean(backend["saving"]),
+          let backendPending = boolean(backend["pending"]), let backendUnsaved = boolean(backend["unsaved"]) else { return nil }
+    var result = page
+    result["running"] = running || backendBusy
+    result["saving"] = saving || backendSaving
+    result["pending"] = pending || backendPending
+    result["unsaved"] = unsaved
+    result["persistent_unsaved"] = backendUnsaved
+    result["persistent_workspace"] = boolean(page["persistent_workspace"]) == true || backendBusy || backendUnsaved
+    return result
 }
 
 // Only inspect the selected directory itself. Refuse oversized batches rather than truncating.
@@ -48,6 +69,7 @@ final class FolderState {
     private var staleRoles = Set<String>()
     private var values: [String: Any] = [:]
     private let store: URL
+    var preferencesURL: URL { store }
     private let persistHook: (() throws -> Void)?
     private let beforeLinkHook: (() throws -> Void)?
     private let afterLinkHook: (() throws -> Void)?
@@ -76,6 +98,13 @@ final class FolderState {
         let data = try JSONSerialization.data(withJSONObject: values)
         try data.write(to: store, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: store.path)
+    }
+    func compactMigratedReceipts() throws {
+        let keys = ["records", "pending_outputs", "receipts", "exports"]
+        guard keys.contains(where: { values[$0] != nil }) else { return }
+        let previous = values
+        keys.forEach { values.removeValue(forKey: $0) }
+        do { try persist() } catch { values = previous; throw error }
     }
     func choose(_ url: URL, role: String) throws -> [String: Any] {
         let bookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
@@ -341,6 +370,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     private var downloadSources: [ObjectIdentifier: String] = [:]
     private var trustedDownloads = Set<ObjectIdentifier>()
     private var saveWaiters: [String: [([String: Any]) -> Void]] = [:]
+    private let nativeToken = (UUID().uuidString + UUID().uuidString).replacingOccurrences(of: "-", with: "")
+    private var workspaceSaves = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -385,6 +416,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/DialogueTTSService")
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
+        var environment = ProcessInfo.processInfo.environment
+        environment["DIALOGUE_NATIVE_TOKEN"] = nativeToken
+        environment["DIALOGUE_NATIVE_STATE_DIR"] = folderState.preferencesURL.deletingLastPathComponent().path
+        process.environment = environment
         service = process
         var buffer = Data()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -457,7 +492,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 let alert = NSAlert(); alert.messageText = "暂时无法确认任务和保存状态"
                 alert.informativeText = "请等待页面完成操作后再退出，已有结果保持可恢复。"; alert.runModal(); NSApp.reply(toApplicationShouldTerminate: false); return
             }
-            if saving || !self.trustedDownloads.isEmpty || !self.saveWaiters.isEmpty {
+            if saving || !self.trustedDownloads.isEmpty || !self.saveWaiters.isEmpty || self.workspaceSaves > 0 {
                 let alert = NSAlert(); alert.messageText = "正在保存音频"; alert.informativeText = "请等待保存完成后再退出。"; alert.runModal(); NSApp.reply(toApplicationShouldTerminate: false); return
             }
             if unsaved {
@@ -467,14 +502,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 let answer = alert.runModal()
                 if answer == .alertFirstButtonReturn { self.webView.evaluateJavaScript("window.dialogueShowUnsaved && window.dialogueShowUnsaved()", completionHandler: nil); NSApp.reply(toApplicationShouldTerminate: false); return }
                 guard answer == .alertSecondButtonReturn else { NSApp.reply(toApplicationShouldTerminate: false); return }
+            } else if safety["persistent_unsaved"] as? Bool == true {
+                let alert = NSAlert(); alert.messageText = "未保存的完整音频已缓存在本机"
+                alert.informativeText = "退出会中断后台任务，但会保留进度和完整缓存。下次打开核验目录后，可重试保存或明确授权后继续生成。"
+                alert.addButton(withTitle: "保存进度并退出"); alert.addButton(withTitle: "返回保存"); alert.addButton(withTitle: "取消退出")
+                let answer = alert.runModal()
+                if answer == .alertSecondButtonReturn { self.webView.evaluateJavaScript("window.dialogueShowUnsaved && window.dialogueShowUnsaved()", completionHandler: nil); NSApp.reply(toApplicationShouldTerminate: false); return }
+                guard answer == .alertFirstButtonReturn else { NSApp.reply(toApplicationShouldTerminate: false); return }
             } else if running {
                 let alert = NSAlert(); alert.messageText = "停止合成并退出？"; alert.informativeText = "正在运行的任务将停止。"
+                if safety["persistent_workspace"] as? Bool == true { alert.informativeText = "任务进度保存在本机。下次打开后核验目录权限，并点击继续，才会重新联网合成。" }
                 alert.addButton(withTitle: "停止并退出"); alert.addButton(withTitle: "取消退出")
                 guard alert.runModal() == .alertFirstButtonReturn else { NSApp.reply(toApplicationShouldTerminate: false); return }
             }
-            self.closing = true
-            self.clearSaveState()
-            process.terminate()
+            self.checkingClose = true
+            self.finishTermination(process, approvedPersistent: running || safety["persistent_unsaved"] as? Bool == true)
+        }
+        webView.evaluateJavaScript("window.dialogueCloseSafety && window.dialogueCloseSafety()") { result, error in
+            guard error == nil, let state = result as? [String: Any] else { finish(nil); return }
+            self.nativeRequest("/api/native/workspaces/safety", [:], timeout: 3) { backend in
+                finish(mergeNativeCloseSafety(state, backend))
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish(nil) }
+        // AppKit resumes only after the page reply, prompt and service shutdown.
+        return .terminateLater
+    }
+
+    private func finishTermination(_ process: Process, approvedPersistent: Bool) {
+        nativeRequest("/api/native/workspaces/safety", [:], timeout: 3) { [weak self] backend in
+            guard let self = self else { return }
+            let idle: [String: Any] = ["running": false, "saving": false, "pending": false, "unsaved": false]
+            guard let state = mergeNativeCloseSafety(idle, backend), state["pending"] as? Bool == false,
+                  state["saving"] as? Bool == false, self.workspaceSaves == 0,
+                  self.trustedDownloads.isEmpty, self.saveWaiters.isEmpty,
+                  approvedPersistent || (state["running"] as? Bool == false && state["persistent_unsaved"] as? Bool == false) else {
+                let alert = NSAlert(); alert.messageText = "任务或保存状态发生变化"
+                alert.informativeText = "请等待当前保存完成，确认全部任务后再退出。已有进度和完整缓存会保留。"
+                self.checkingClose = false
+                alert.runModal(); NSApp.reply(toApplicationShouldTerminate: false); return
+            }
+            self.checkingClose = false; self.closing = true; self.clearSaveState(); process.terminate()
             DispatchQueue.global(qos: .userInitiated).async {
                 let deadline = Date().addingTimeInterval(6)
                 while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
@@ -483,12 +551,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 DispatchQueue.main.async { self.closeApproved = true; NSApp.reply(toApplicationShouldTerminate: true) }
             }
         }
-        webView.evaluateJavaScript("window.dialogueCloseSafety && window.dialogueCloseSafety()") { result, error in
-            if error == nil, let state = result as? [String: Any] { finish(state) } else { finish(nil) }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish(nil) }
-        // AppKit resumes only after the page reply, prompt and service shutdown.
-        return .terminateLater
     }
 
     private func isLocal(_ url: URL) -> Bool {
@@ -523,6 +585,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         notifyPage("dialogueNativeRevealResult", payload: ["ok": true])
     }
 
+    private func nativeRequest(_ route: String, _ payload: [String: Any], timeout: TimeInterval = 60, completion: @escaping ([String: Any]) -> Void) {
+        guard let base = baseURL, route.hasPrefix("/api/native/"),
+              let target = URL(string: route, relativeTo: base)?.absoluteURL, isLocal(target),
+              let data = try? JSONSerialization.data(withJSONObject: payload) else { completion(["ok": false, "error": "原生服务未就绪"]); return }
+        var request = URLRequest(url: target)
+        request.httpMethod = "POST"; request.timeoutInterval = timeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(nativeToken, forHTTPHeaderField: "X-Native-Token")
+        request.httpBody = data
+        let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
+        session.dataTask(with: request) { bytes, response, error in
+            defer { session.finishTasksAndInvalidate() }
+            var result: [String: Any] = ["ok": false, "error": "目录服务请求失败，请重试"]
+            if error == nil, let response = response as? HTTPURLResponse, response.statusCode == 200,
+               let bytes = bytes, bytes.count <= 1024 * 1024,
+               let decoded = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] { result = decoded }
+            DispatchQueue.main.async { [weak self] in
+                // A successful private request proves the service has opened and
+                // migrated this profile. Keep preference writes small thereafter.
+                if result["ok"] as? Bool != false, result["error"] == nil { try? self?.folderState.compactMigratedReceipts() }
+                completion(result)
+            }
+        }.resume()
+    }
+
+    private func workspaceFolder(_ id: String, role: String, completion: @escaping ([String: Any]) -> Void) {
+        if let directory = folderState.folder(id, role: role) {
+            nativeRequest("/api/native/folders", ["kind": role, "path": directory.path], completion: completion)
+        } else {
+            nativeRequest("/api/native/folders/info", ["kind": role, "folder_id": id], completion: completion)
+        }
+    }
+
+    private func adoptReceipt(_ receipt: [String: Any]) -> [String: Any] {
+        var result = receipt
+        if receipt["ok"] as? Bool == true, let path = receipt["path"] as? String {
+            result["save_id"] = savedDownloads.register(URL(fileURLWithPath: path))
+        }
+        return result
+    }
+
+    private func saveWithLedger(_ route: String, folderID: String?, directory: URL? = nil, reply: @escaping ([String: Any]) -> Void) {
+        workspaceSaves += 1
+        let registered: ([String: Any]) -> Void = { [weak self] folder in
+            guard let self = self else { return }
+            guard folder["ok"] as? Bool != false, let id = folder["folder_id"] as? String else { self.workspaceSaves -= 1; reply(folder); return }
+            self.nativeRequest("/api/native/outputs/save", ["folder_id": id, "resource_path": route]) { result in
+                self.workspaceSaves -= 1
+                let receipt = self.adoptReceipt(result)
+                reply(receipt)
+                if receipt["ok"] as? Bool == true { self.notifyPage("dialogueNativeSaved", payload: receipt) }
+            }
+        }
+        if let directory = directory { nativeRequest("/api/native/folders", ["kind": "output", "path": directory.path], completion: registered) }
+        else if let id = folderID { workspaceFolder(id, role: "output", completion: registered) }
+        else { workspaceSaves -= 1; reply(["ok": false, "error": "请选择结果目录"]) }
+    }
+
     private func handleFolderMessage(_ body: Any) {
         guard let message = body as? [String: Any], let requestID = message["request_id"] as? String,
               requestID.count <= 128, let method = message["method"] as? String,
@@ -536,6 +656,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         case "set_preferences":
             do { reply(try folderState.setPreferences(args) ? ["ok": true] : ["ok": false, "error": "设置无效"]) }
             catch { reply(["ok": false, "error": "无法保存设置"]) }
+        case "choose_workspace_input", "choose_workspace_output":
+            let role = method == "choose_workspace_input" ? "input" : "output"
+            let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+            panel.beginSheetModal(for: window) { [weak self] response in
+                guard let self = self, !self.closing else { return }
+                guard response == .OK, let directory = panel.url else { reply(["cancelled": true]); return }
+                self.nativeRequest("/api/native/folders", ["kind": role, "path": directory.path]) { result in
+                    guard result["ok"] as? Bool != false else { reply(result); return }
+                    do { _ = try self.folderState.choose(directory, role: role); var chosen = result; chosen["ok"] = true; reply(chosen) }
+                    catch { reply(["ok": false, "error": "目录偏好未能保存，请重试"]) }
+                }
+            }
+        case "restore_workspace_access":
+            guard let id = args["workspace_id"] as? String, id.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil else { reply(["ok": false, "error": "任务标识无效"]); return }
+            nativeRequest("/api/native/workspaces/restore", ["workspace_id": id], completion: reply)
         case "choose_input_directory", "choose_output_directory":
             let role = method == "choose_input_directory" ? "input" : "output"
             let panel = NSOpenPanel()
@@ -555,26 +690,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             do { reply(["ok": true, "folder_id": id, "path": url.path, "files": try readSelectedXMLFolder(url)]) }
             catch { reply(["ok": false, "error": "无法读取文件夹，请检查 XML 数量、大小和权限。 "]) }
         case "check_output_space":
-            guard let id = args["folder_id"] as? String, let url = folderState.folder(id, role: "output") else { reply(["ok": false, "error": "文件夹授权无效"]); return }
-            let probe = url.appendingPathComponent(".dialogue-check-" + UUID().uuidString)
-            let fd = open(probe.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
-            guard fd >= 0 else { reply(["ok": false, "error": "无法写入结果文件夹，请重新选择。"]); return }
-            close(fd); unlink(probe.path)
-            let free = (try? url.resourceValues(forKeys: [.volumeAvailableCapacityKey]).volumeAvailableCapacity).flatMap { $0 }
-            reply(["ok": true, "writable": true, "free_bytes": free.map { $0 as Any } ?? NSNull()])
+            guard let id = args["folder_id"] as? String else { reply(["ok": false, "error": "文件夹授权无效"]); return }
+            workspaceFolder(id, role: "output") { result in
+                guard result["ok"] as? Bool != false, let path = result["path"] as? String else { reply(result); return }
+                let url = URL(fileURLWithPath: path), probe = URL(fileURLWithPath: path).appendingPathComponent(".dialogue-check-" + UUID().uuidString)
+                let fd = open(probe.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+                guard fd >= 0 else { reply(["ok": false, "error": "无法写入结果文件夹，请重新选择"]); return }
+                close(fd); unlink(probe.path)
+                let free = (try? url.resourceValues(forKeys: [.volumeAvailableCapacityKey]).volumeAvailableCapacity).flatMap { $0 }
+                reply(["ok": true, "writable": true, "free_bytes": free.map { $0 as Any } ?? NSNull()])
+            }
         case "check_completed":
-            guard let id = args["folder_id"] as? String, let url = folderState.folder(id, role: "output"),
+            guard let id = args["folder_id"] as? String,
                   let fingerprints = args["fingerprints"] as? [String], fingerprints.count <= 50,
                   fingerprints.allSatisfy({ $0.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil }) else { reply(["ok": false, "error": "完成记录请求无效"]); return }
             let names = args["expected_names"] as? [String: String]
             guard args["expected_names"] == nil || (names != nil && Set(names!.keys) == Set(fingerprints) && names!.values.allSatisfy(FolderState.validName)) else { reply(["ok": false, "error": "预期名称无效"]); return }
-            let completed = folderState.completed(fingerprints, directory: url, registry: savedDownloads, expectedNames: names)
-            reply(["ok": true, "completed": completed, "conflicts": names.map { folderState.conflicts($0, completed: completed, directory: url) } ?? []])
+            workspaceFolder(id, role: "output") { [weak self] folder in
+                guard let self = self, folder["ok"] as? Bool != false, let grant = folder["folder_id"] as? String else { reply(folder); return }
+                var payload: [String: Any] = ["folder_id": grant, "fingerprints": fingerprints]
+                if let names = names { payload["expected_names"] = names }
+                self.nativeRequest("/api/native/outputs/check", payload) { result in
+                    var adopted = result
+                    if let items = result["completed"] as? [[String: Any]] { adopted["completed"] = items.map { self.adoptReceipt($0) } }
+                    reply(adopted)
+                }
+            }
         case "save_to_output":
-            guard let id = args["folder_id"] as? String, let directory = folderState.folder(id, role: "output"),
-                  let route = args["resource_path"] as? String, route.range(of: "^/api/(jobs/[a-zA-Z0-9_-]{1,100}/audio|batches/[a-zA-Z0-9_-]{1,100}/audio/[0-9]{3})$", options: .regularExpression) != nil,
-                  let base = baseURL, let target = URL(string: route, relativeTo: base)?.absoluteURL, isLocal(target) else { reply(["ok": false, "error": "输出请求无效"]); return }
-            performAudioSave(route, directory: directory, id: id, reply: reply)
+            guard let id = args["folder_id"] as? String,
+                  let route = args["resource_path"] as? String, route.range(of: "^/api/(jobs/[a-f0-9]{32}/audio|batches/[a-f0-9]{32}/audio/[0-9]{3})$", options: .regularExpression) != nil else { reply(["ok": false, "error": "输出请求无效"]); return }
+            saveWithLedger(route, folderID: id, reply: reply)
         case "save_download":
             guard let route = args["resource_path"] as? String, route.range(of: "^/api/(jobs/[a-f0-9]{32}/audio|batches/[a-f0-9]{32}/audio/[0-9]{3})$", options: .regularExpression) != nil else { reply(["ok": false, "error": "输出请求无效"]); return }
             let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
@@ -582,11 +727,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             panel.beginSheetModal(for: window) { [weak self] response in
                 guard let self = self, !self.closing else { return }
                 guard response == .OK, let directory = panel.url else { reply(["cancelled": true]); return }
-                self.performAudioSave(route, directory: directory, id: nil, reply: reply)
+                self.saveWithLedger(route, folderID: nil, directory: directory, reply: reply)
             }
         case "reveal_output":
-            guard let id = args["folder_id"] as? String, let url = folderState.folder(id, role: "output") else { reply(["ok": false, "error": "文件夹授权无效"]); return }
-            reply(["ok": NSWorkspace.shared.open(url)])
+            guard let id = args["folder_id"] as? String else { reply(["ok": false, "error": "文件夹授权无效"]); return }
+            workspaceFolder(id, role: "output") { result in
+                guard result["ok"] as? Bool != false, let path = result["path"] as? String else { reply(result); return }
+                reply(["ok": NSWorkspace.shared.open(URL(fileURLWithPath: path))])
+            }
         default: reply(["ok": false, "error": "该功能尚未完成"])
         }
     }
@@ -720,7 +868,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
     private func installUpdate(_ version: String, reply: @escaping ([String: Any]) -> Void) {
         guard !updating, let offered = offeredUpdate, let identity = offeredUpdateIdentity, let runningService = service, runningService.isRunning,
-              trustedDownloads.isEmpty, saveWaiters.isEmpty else { reply(["state": "error", "message": "请先完成任务并保存所有结果，再检查更新。"]); return }
+              trustedDownloads.isEmpty, saveWaiters.isEmpty, workspaceSaves == 0 else { reply(["state": "error", "message": "请先完成任务并保存所有结果，再检查更新。"]); return }
         updating = true
         webView.evaluateJavaScript("window.dialogueUpdateSafety && window.dialogueUpdateSafety()") { [weak self] result, error in
             guard let self = self, !self.closing else { return }

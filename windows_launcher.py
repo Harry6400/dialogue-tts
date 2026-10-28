@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.request
 import webbrowser
+from contextlib import ExitStack
 
 
 from native_windows_folders import NativeFolderMixin
@@ -18,18 +19,30 @@ from native_windows_updater import NativeUpdaterMixin
 
 class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
     """Only app-owned successful saves may be revealed; JS never supplies a path."""
-    def __init__(self, base, storage=None):
+    def __init__(self, base, storage=None, native_token=None, workspace_access=None):
         self._base = base
         self._window = None
         self._closing = False
         self._saved = {}
         self._lock = threading.Lock()
+        self._native_token = native_token
+        self._workspace_access = workspace_access
+        self._owns_workspace_access = False
         self._setup_folders(storage)
 
     def request_close(self):
         if self._window is None: return {'ok': False}
         threading.Timer(.05, self._window.destroy).start()
         return {'ok': True}
+
+    def _close_snapshot(self, page):
+        from native_close import merge_close_safety, workspace_safety
+        server = self._update_server
+        state = merge_close_safety(page, workspace_safety(server))
+        if state is not None:
+            with server.jobs.lock, server.batches.lock:
+                state['running'] = state['running'] or any(item['process'].poll() is None for item in server.jobs.items.values()) or bool(server.batches.active)
+        return state
 
     def save_download(self, route):
         if self._closing: return {'ok': False, 'error': '正在退出'}
@@ -158,10 +171,11 @@ def self_test(report_path, live=False):
                     import tempfile
                     from types import SimpleNamespace
                     from unittest.mock import patch
-                    with tempfile.TemporaryDirectory() as folder:
+                    with tempfile.TemporaryDirectory() as folder, ExitStack() as cleanup:
                         target = Path(folder) / status['filename']
                         callbacks = []
                         bridge = NativeDownloads(base,Path(folder)/'private-preferences.json')
+                        cleanup.callback(bridge._close_folders)
                         bridge._window = SimpleNamespace(create_file_dialog=lambda *a, **k: (folder,), evaluate_js=callbacks.append)
                         with patch.dict(sys.modules, {'webview': SimpleNamespace(FileDialog=SimpleNamespace(FOLDER=20,SAVE=30))}):
                             saved = bridge.save_download(status['download_url'])
@@ -233,7 +247,12 @@ def run_window(gui_report=None):
     from web_dialogue.install_lock import InstallationLease
     installation_lease=InstallationLease(sys.executable).acquire() if getattr(sys,'frozen',False) else None
     from web_dialogue.app import make_server
-    server = make_server(0)
+    from web_dialogue.verification_profile import verification_root
+    import secrets
+    gui_temp = tempfile.TemporaryDirectory(prefix='dialogue-gui-ci-') if gui_report else None
+    state_dir = Path(gui_temp.name) if gui_temp else verification_root() or Path(os.environ.get('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))) / 'DialogueTTS'
+    native_token = secrets.token_hex(32)
+    server = make_server(0, state_dir=state_dir, native_token=native_token)
     # The native window close control owns the shutdown lifecycle.
     server.can_shutdown = False
     service = threading.Thread(target=server.serve_forever, daemon=True)
@@ -243,8 +262,14 @@ def run_window(gui_report=None):
     webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER'] = True
     webview.settings['IGNORE_SSL_ERRORS'] = False
     url = f"http://127.0.0.1:{server.server_address[1]}"
-    gui_temp = tempfile.TemporaryDirectory(prefix='dialogue-gui-ci-') if gui_report else None
-    downloads = NativeDownloads(url, Path(gui_temp.name) / 'preferences.json' if gui_temp else None)
+    downloads = NativeDownloads(url, state_dir / 'preferences.json', native_token=native_token, workspace_access=server.native_access)
+    if gui_report:
+        from web_dialogue.xml_example import XML_EXAMPLE
+        fixture = state_dir / 'synthetic-input'; fixture.mkdir()
+        for i, item in enumerate(XML_EXAMPLE):
+            (fixture / f'20261028001{i}.xml').write_text(item['content'], encoding='utf-8')
+        grant = server.native_access.register(fixture, 'input')
+        server.workspaces.import_folder(grant['folder_id'])
     window = webview.create_window('对白', url, js_api=downloads, width=1180, height=840, min_size=(760,620), background_color='#F5F7F8')
     downloads._window = window
     downloads._setup_updater(server)
@@ -256,28 +281,42 @@ def run_window(gui_report=None):
     report = {'frozen':bool(getattr(sys,'frozen',False)), 'platform':sys.platform, 'passed':False}
     checking_close = threading.Event()
     def review_close():
+        save_guard = False; folder_guard = False
         try:
-            with server.jobs.lock:
-                running = any(item['process'].poll() is None for item in server.jobs.items.values())
-            import ctypes
-            from native_close import close_decision
-            try: state = window.evaluate_js("window.dialogueCloseSafety && window.dialogueCloseSafety()")
-            except Exception: state = None
-            def prompt(kind):
-                if kind == 'unsaved':
-                    answer = ctypes.windll.user32.MessageBoxW(None, '还有未保存的音频。退出会清理临时结果，并停止正在运行的任务。\n是：返回保存；否：放弃并退出；取消：取消退出。', '对白', 0x23)
-                    return {6:'save',7:'discard'}.get(answer,'cancel')
-                if kind == 'running':
-                    return 'discard' if ctypes.windll.user32.MessageBoxW(None, '正在合成，确定停止并退出？', '对白', 0x24) == 6 else 'cancel'
-                ctypes.windll.user32.MessageBoxW(None, '正在保存或暂时无法确认页面状态，请完成操作后再退出。', '对白', 0x40)
-                return 'cancel'
-            decision = close_decision(state, running=running, saving=downloads._lock.locked(), prompt=prompt)
-            if decision == 'save':
-                window.evaluate_js("window.dialogueShowUnsaved && window.dialogueShowUnsaved()")
-            if decision != 'exit': return
-            downloads._closing = True
-            window.destroy()
+            with server.update_lock:
+                save_guard = downloads._lock.acquire(False)
+                folder_guard = downloads._folder_lock.acquire(False)
+                import ctypes
+                from native_close import close_decision, workspace_safety
+                try: page = window.evaluate_js("window.dialogueCloseSafety && window.dialogueCloseSafety()")
+                except Exception: page = None
+                state = downloads._close_snapshot(page)
+                def prompt(kind):
+                    if kind == 'unsaved':
+                        answer = ctypes.windll.user32.MessageBoxW(None, '还有未保存的临时音频。退出会清理临时结果，并停止正在运行的任务。\n是：返回保存；否：明确放弃并退出；取消：取消退出。', '对白', 0x23)
+                        return {6:'save',7:'discard'}.get(answer,'cancel')
+                    if kind == 'persistent':
+                        message = '还有未保存的完整音频，已保存在本机任务缓存中。退出会中断后台任务，但会保留进度和缓存；下次打开核验目录后可重试保存或继续。是否保存进度并退出？'
+                        return 'preserve' if ctypes.windll.user32.MessageBoxW(None, message, '对白', 0x24) == 6 else 'cancel'
+                    if kind == 'running':
+                        message = '退出将中断后台任务；进度已保存在本机，下次打开核验目录后可继续。' if isinstance(state, dict) and state.get('persistent_workspace') else '正在合成，确定停止并退出？'
+                        return 'discard' if ctypes.windll.user32.MessageBoxW(None, message, '对白', 0x24) == 6 else 'cancel'
+                    ctypes.windll.user32.MessageBoxW(None, '正在保存或暂时无法确认全部任务状态，请完成操作后再退出。', '对白', 0x40)
+                    return 'cancel'
+                decision = close_decision(state, saving=not save_guard or not folder_guard, prompt=prompt)
+                if decision == 'save':
+                    window.evaluate_js("window.dialogueShowUnsaved && window.dialogueShowUnsaved()")
+                if decision != 'exit': return
+                # A running workspace can enter publication while its confirmation
+                # is displayed. Recheck immediately before destroying the window.
+                latest = workspace_safety(server)
+                if latest is None or latest['saving'] or latest['pending']:
+                    prompt('unknown' if latest is None else 'saving'); return
+                downloads._closing = True
+                window.destroy()
         finally:
+            if folder_guard: downloads._folder_lock.release()
+            if save_guard: downloads._lock.release()
             checking_close.clear()
 
     def closing():
@@ -319,36 +358,32 @@ $b.Save($args[1],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()
             return output.name
         def inspect_window():
             try:
-                ready = time.monotonic()+10
-                while time.monotonic()<ready:
-                    if window.evaluate_js("typeof config !== 'undefined' && config !== null"): break
-                    time.sleep(.1)
-                window.evaluate_js("document.getElementById('example').click()")
-                deadline = time.monotonic()+15
-                while time.monotonic()<deadline:
-                    result = window.evaluate_js("JSON.stringify({title:document.title, rows:document.querySelectorAll('#preview .line').length, roles:document.querySelectorAll('#voices select').length, update:!!document.getElementById('checkupdate')})")
-                    state = json.loads(result)
-                    if state['rows'] == 5 and state['roles'] == 2:
-                        report.update(state)
-                        report['screenshots'] = []
-                        window.resize(1280,800)
-                        window.evaluate_js("applyTheme('light')")
-                        report['screenshots'].append(capture_window('light-1280'))
-                        window.resize(1024,700)
-                        window.evaluate_js("applyTheme('dark')")
-                        report['screenshots'].append(capture_window('dark-1024'))
-                        state['theme_restore'] = downloads.set_preferences({'theme':'dark'})['ok'] and NativeDownloads(url, Path(gui_temp.name) / 'preferences.json').get_preferences()['theme'] == 'dark'
-                        state['separate_audio'] = bool(window.evaluate_js("document.getElementById('auditionaudio')!==document.getElementById('audio')"))
-                        state['summary'] = bool(window.evaluate_js("JSON.stringify(summarizeBatch([{id:'one',status:'done'},{id:'two',status:'error'}],[{id:'three',status:'error',error_code:'missing_track'}],new Set()))").find('missing') >= 0)
-                        state['summary_navigation'] = bool(window.evaluate_js("""(()=>{batchGroups=[{id:'g1',status:'ready'},{id:'g2',status:'error',error_code:'missing_track'}];batchSkippedSnapshot=new Set();$('preview').hidden=false;$('preview').innerHTML='<div data-group-id=\"g1\" tabindex=\"-1\"></div><div data-group-id=\"g2\" tabindex=\"-1\">缺轨（虚构）</div>';renderBatchStatus({id:'fixture',items:[{id:'g1',name:'虚构对话',status:'error',error:'模拟失败'}]});[...$('batchsummary').querySelectorAll('button')].find(x=>x.textContent.includes('失败')).click();return document.activeElement.parentElement.id==='batchresults';})()"""))
-                        report['screenshots'].append(capture_window('batch-fixture'))
-                        state['scope_note'] = 'Synthetic fixtures; no live speech or update installation; screenshots require human visual review.'
-                        report.update(state)
-                        report['passed']=all(state[k] for k in ('update','theme_restore','separate_audio','summary','summary_navigation'))
-                        break
+                deadline = time.monotonic() + 25
+                while time.monotonic() < deadline:
+                    ready = window.evaluate_js("!!document.querySelector('[data-testid=workspace-ready]') && !!document.querySelector('[data-testid=app-shell]')")
+                    if ready: break
                     time.sleep(.2)
-                if not report['passed']: report['error']='Native UI did not show the expected example'
-            except Exception as exc: report['error']=str(exc)
+                if not ready: raise RuntimeError('Native React workspace did not become ready')
+                def set_theme(theme):
+                    if window.evaluate_js("document.documentElement.dataset.theme") != theme:
+                        window.evaluate_js("document.querySelector('[data-testid=theme-toggle]').click()")
+                    until = time.monotonic() + 5
+                    while time.monotonic() < until:
+                        if window.evaluate_js("document.documentElement.dataset.theme") == theme: return
+                        time.sleep(.1)
+                    raise RuntimeError('Theme change did not apply')
+                state = json.loads(window.evaluate_js("JSON.stringify({title:document.title,app_shell:!!document.querySelector('[data-testid=app-shell]'),sidebar:!!document.querySelector('[data-testid=sidebar]'),import_folder:!!document.querySelector('[data-testid=import-folder]'),consent_unchecked:!!document.querySelector('[data-testid=consent]')&&!document.querySelector('[data-testid=consent]').checked,generate_disabled:!!document.querySelector('[data-testid=generate]')&&document.querySelector('[data-testid=generate]').disabled,close_safety:typeof window.dialogueCloseSafety==='function'&&window.dialogueCloseSafety().persistent_workspace===true})"))
+                report['screenshots'] = []
+                window.resize(1280, 800); set_theme('light')
+                report['screenshots'].append(capture_window('light-1280'))
+                window.resize(1024, 700); set_theme('dark')
+                report['screenshots'].append(capture_window('dark-1024'))
+                state['theme_restore'] = downloads.get_preferences()['theme'] == 'dark' and NativeDownloads(url, state_dir / 'preferences.json', native_token=native_token, workspace_access=server.native_access).get_preferences()['theme'] == 'dark'
+                state['scope_note'] = 'Real packaged React UI with one synthetic local XML pair; no live speech or update installation; screenshots require visual review.'
+                report.update(state)
+                report['passed'] = all(state[k] for k in ('app_shell', 'sidebar', 'import_folder', 'consent_unchecked', 'generate_disabled', 'close_safety', 'theme_restore'))
+                if not report['passed']: report['error'] = 'Native React controls or privacy defaults failed verification'
+            except Exception as exc: report['error'] = str(exc)
             finally: window.destroy()
         window.events.loaded += lambda: threading.Thread(target=inspect_window,daemon=True).start()
         timeout = threading.Timer(40, lambda: window.destroy())
@@ -359,7 +394,11 @@ $b.Save($args[1],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()
         if gui_report: report['error']=str(exc)
         else: raise
     finally:
-        server.shutdown(); server.server_close(); server.jobs.close()
+        server.shutdown(); server.server_close()
+        if getattr(server, 'workspaces', None): server.workspaces.close()
+        server.jobs.close()
+        downloads._close_folders()
+        if getattr(server, 'native_access', None): server.native_access.close()
         if installation_lease: installation_lease.close()
         if gui_temp: gui_temp.cleanup()
         if gui_report:

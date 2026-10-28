@@ -21,4 +21,10 @@ PyInstaller bootloader) retain their respective licenses. Binary builders
 must include notices from the exact installed dependency distributions.
 Code licenses do not grant rights to Microsoft's online speech service.
 
+The native workbench includes React, React DOM and Scheduler (MIT),
+Lucide icons (ISC and the included Feather MIT notices), and Radix Select
+with its runtime dependencies (each retaining its installed license).
+The exact installed versions and complete runtime license texts are supplied in
+third_party/bundled-runtime/frontend-dependencies.json and its listed folders.
+
 defusedxml 0.7.1: Python Software Foundation License, see third_party/defusedxml-LICENSE.txt. Official source: https://github.com/tiran/defusedxml

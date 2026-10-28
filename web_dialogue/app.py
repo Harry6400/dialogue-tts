@@ -187,6 +187,8 @@ class Jobs:
             return self.snapshot(ident)
 
     def close(self):
+        if hasattr(self, "workspaces"):
+            self.workspaces.close()
         if hasattr(self, "batches"):
             self.batches.close()
         with self.lock:
@@ -246,6 +248,14 @@ class Handler(BaseHTTPRequestHandler):
         if not self.valid_host():
             return self.json({"error": "此服务仅允许本机访问。"}, 403)
         path = urlsplit(self.path).path
+        if getattr(self.server, 'workspaces', None):
+            from .frontend_assets import serve_frontend
+            if serve_frontend(self, path):
+                return
+        if path.startswith('/api/workspaces'):
+            from .workspace_http import get_workspace
+            if get_workspace(self, path):
+                return
         if path == "/":
             body = (ROOT / "web_dialogue" / "index.html").read_bytes()
             self.headers_for(200, "text/html; charset=utf-8", len(body))
@@ -342,17 +352,28 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         if origin and origin not in self.server.allowed_origins:
             return self.json({"error": "拒绝跨站请求。"}, 403)
-        token = self.headers.get("X-App-Token", "")
-        if not hmac.compare_digest(token.encode("utf-8"), self.server.token.encode("utf-8")):
+        private = urlsplit(self.path).path.startswith('/api/native/')
+        expected = getattr(self.server, 'native_token', None) if private else self.server.token
+        token = self.headers.get("X-Native-Token" if private else "X-App-Token", "")
+        if not expected or not hmac.compare_digest(token.encode("utf-8"), expected.encode("utf-8")):
             return self.json({"error": "页面会话已过期，请刷新后重试。"}, 403)
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_BODY:
                 return self.json({"error": "请求为空或超过64MiB，请缩小输入文件。"}, 413)
+            if (private or urlsplit(self.path).path.startswith('/api/workspaces')) and length > 256 * 1024:
+                return self.json({'error':'工作区请求超过大小限制。'},413)
             self.connection.settimeout(15)
             payload = json.loads(self.rfile.read(length).decode("utf-8-sig"))
             path = urlsplit(self.path).path
+            if path.startswith('/api/workspaces') or path.startswith('/api/native/'):
+                if not isinstance(payload, dict):
+                    raise InputError('请求必须为对象。')
+                from .workspace_http import post_workspace
+                return self.json(post_workspace(self, path, payload))
             if path == "/api/update/lock":
+                if getattr(self.server, 'workspaces', None) and any(self.server.workspaces.safety().values()):
+                    return self.json({'error':'请先暂停任务并保存完整音频，再更新。'},409)
                 with self.server.jobs.lock, self.server.batches.lock:
                     if any(item["process"].poll() is None for item in self.server.jobs.items.values()) or self.server.batches.active:
                         return self.json({"error":"正在合成，请稍后更新"}, 409)
@@ -411,7 +432,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"error": "无法创建临时文件或合成进程，请检查本机可用空间与权限。"}, 500)
 
 
-def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None, catalog=None):
+def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None, catalog=None,
+                state_dir=None, native_token=None):
     if access_key and (not access_key.isascii() or any(c.isspace() for c in access_key) or ":" in access_key):
         raise ValueError("专用访问密码必须为无空格的 ASCII 字符，不可包含冒号。")
     if bind not in {"127.0.0.1", "0.0.0.0"}:
@@ -440,6 +462,23 @@ def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None
     from .batches import Batches
     server.batches = Batches(server.jobs, server.voice_catalog["voices"])
     server.jobs.batches = server.batches
+    server.workspaces = None
+    server.native_access = None
+    server.workspace_access = None
+    server.native_token = None
+    native_token = native_token or os.environ.pop('DIALOGUE_NATIVE_TOKEN', None)
+    if state_dir is not None and native_token:
+        if bind != '127.0.0.1' or public_origin:
+            server.server_close()
+            server.jobs.close()
+            raise ValueError('原生工作区只能监听本机。')
+        from native_workspace import NativeWorkspaceAccess
+        from .workspaces import Workspaces
+        server.native_token = native_token
+        server.native_access = NativeWorkspaceAccess(state_dir)
+        server.workspace_access = server.native_access
+        server.workspaces = Workspaces(state_dir, server.jobs, server.native_access, server.voice_catalog)
+        server.jobs.workspaces = server.workspaces
     return server
 
 

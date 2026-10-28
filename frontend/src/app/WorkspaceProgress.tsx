@@ -1,0 +1,5 @@
+import type {WorkspaceSummary} from '../types/contracts';
+import {count} from './format';
+import styles from './App.module.css';
+const statusText = {scanning: '正在扫描', ready: '准备就绪', running: '正在生成', pausing: '正在保存进度', paused: '已暂停', interrupted: '上次运行中断', done: '本次已完成', cancelled: '扫描已取消', error: '需要处理'};
+export function WorkspaceProgress({workspace}: {workspace: WorkspaceSummary}) {return <div className={styles.progressSummary} data-testid={workspace.status === 'scanning' ? 'scan-progress' : 'task-progress'}><div><strong>{statusText[workspace.status]}</strong><span>{workspace.status === 'scanning' ? `已扫描 ${count(workspace.scanned)} 份文件` : `已保存 ${count(workspace.saved)} 通 · 需处理 ${count(workspace.error)} 通`}</span></div><progress aria-label={workspace.status === 'scanning' ? '扫描进度' : '生成进度'} max={Math.max(1, workspace.status === 'scanning' ? workspace.discovered : workspace.total)} value={workspace.status === 'scanning' ? undefined : workspace.processed}/>{workspace.message && <p>{workspace.message}</p>}{workspace.active_item && <p>当前：{workspace.active_item.filename || '正在处理通话'}</p>}</div>;}
