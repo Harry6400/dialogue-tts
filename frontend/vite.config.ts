@@ -16,5 +16,5 @@ export default defineConfig({
     }},
   },
   build: {target: ['safari15', 'edge109'], cssTarget: 'safari15'},
-  test: {environment: 'jsdom', setupFiles: ['./src/test/setup.ts'], clearMocks: true, fileParallelism: false},
+  test: {environment: 'jsdom', setupFiles: ['./src/test/setup.ts'], clearMocks: true},
 });

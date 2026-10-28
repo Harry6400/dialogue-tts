@@ -69,14 +69,21 @@ async function findCall(name: string) {
   return button;
 }
 function call(name: string) {return within(activeTable()).getByText(name, {selector: 'button'});}
-function pageControl(name: string) {return within(activeTable().parentElement!.parentElement!).getByLabelText(name, {selector: 'button'});}
-function issuePanel() {return screen.getByLabelText('问题分类');}
+// getByLabelText computes .labels for every form control, making the dense
+// table dominate JSDOM runtime. These landmarks have explicit aria-labels;
+// locate that attribute directly and still assert the accessible name.
+function labelled(container: ParentNode, name: string) {
+  const matches = Array.from(container.querySelectorAll<HTMLElement>('[aria-label]')).filter(node => node.getAttribute('aria-label') === name);
+  expect(matches).toHaveLength(1);
+  expect(matches[0]).toHaveAccessibleName(name);
+  return matches[0];
+}
+function pageControl(name: string) {return labelled(activeTable().parentElement!.parentElement!, name);}
+function issuePanel() {return labelled(document, '问题分类');}
 function issueControl(name: string) {return within(issuePanel()).getByRole('button', {name});}
-function statusFilter() {return within(screen.getByLabelText('通话状态筛选')).getByRole('button', {name: /^需处理/});}
+function statusFilter() {return within(labelled(document, '通话状态筛选')).getByRole('button', {name: /^需处理/});}
 function footerControl(name: string) {return within(document.querySelector('footer')!).getByRole('button', {name});}
 
-// These full-table integration cases include multiple 100-row page renders.
-// Keep their behavioral assertions; JSDOM runtime on CI is not a UI latency benchmark.
 it('uses global reason counts while pages and selection requests retain the chosen issue scope', async () => {
   const backend = server(); render(<App/>);
   await findCall('000001.mp3');
@@ -93,11 +100,11 @@ it('uses global reason counts while pages and selection requests retain the chos
   expect(within(panel).getByRole('button', {name: '筛选输入文件，205 通'})).toHaveAttribute('aria-pressed', 'true');
   const pageRequest = backend.calls.filter(call => call.url.pathname === '/api/workspaces/issues-workspace').at(-1)!;
   expect(Object.fromEntries(pageRequest.url.searchParams)).toMatchObject({filter: 'error', issue: 'input', page: '2', limit: '100'});
-  fireEvent.click(within(screen.getByLabelText('通话选择操作')).getByRole('button', {name: '清空选择'}));
+  fireEvent.click(within(labelled(document, '通话选择操作')).getByRole('button', {name: '清空选择'}));
   await waitFor(() => expect(backend.calls.some(call => call.url.pathname.endsWith('/selection'))).toBe(true));
   expect(backend.calls.find(call => call.url.pathname.endsWith('/selection'))?.body).toEqual({mode: 'clear', q: '', filter: 'error', issue: 'input'});
   expect(JSON.stringify(backend.calls.map(call => call.body))).not.toContain('item_ids');
-}, 15_000);
+});
 
 it('loads the server-reported next page and focuses that problem, including wraparound', async () => {
   const backend = server(); render(<App/>); await findCall('000001.mp3');
@@ -118,7 +125,7 @@ it('loads the server-reported next page and focuses that problem, including wrap
   await waitFor(() => expect(wrapped).toHaveFocus());
   expect(activeTable().querySelectorAll('tbody tr')).toHaveLength(100);
   expect(within(issuePanel()).getByRole('status')).toHaveTextContent('已回到当前筛选的第一个问题');
-}, 15_000);
+});
 
 it('ignores a next-problem reply after its category has changed', async () => {
   const backend = server(); let resolve!: (value: NextIssue) => void;
@@ -134,7 +141,7 @@ it('ignores a next-problem reply after its category has changed', async () => {
   expect(within(activeTable()).queryByText('100200.mp3', {selector: 'button'})).not.toBeInTheDocument();
   const preview = screen.getByRole('region', {name: '通话快速预览'});
   expect(within(preview).getByText(/检查输出目录权限与可用空间/)).toBeVisible();
-}, 15_000);
+});
 
 it('keeps pending audio outside issue categories and retries saving without source access or synthesis consent', async () => {
   const backend = server({status: 'interrupted', has_run_plan: true, can_edit: false, error: 0, issues: {total: 0, pairing: 0, input: 0, changed: 0, conflict: 0, synthesis: 0, save: 0, other: 0}, save_pending: 2, save_error: 0, synthesis_error: 0, input_folder: {folder_id: 'input', path: '/fictional/missing', valid: false}});
