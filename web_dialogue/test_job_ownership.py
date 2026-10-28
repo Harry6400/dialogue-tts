@@ -193,7 +193,8 @@ class WorkerTransferTests(unittest.TestCase):
         deadline=time.monotonic()+10
         while time.monotonic()<deadline:
             result=self.work.query_summary(self.ident)
-            if (result['status']!='scanning') if scan else self.work.active is None:return result
+            if (result['status']!='scanning') if scan else self.work.active is None:
+                return self.work.query_summary(self.ident)
             time.sleep(.01)
         self.fail('offline work did not settle')
 

@@ -29,6 +29,8 @@ DEFAULT_SETTINGS = {'voices': {'AGENT': VOICES[0]['id'], 'USER': VOICES[1]['id']
 ACTIVE = {'running', 'pausing'}
 WORKSPACE_STATUSES = frozenset({'scanning','ready','running','pausing','paused','interrupted','done','cancelled','error'})
 RECOVERY_PHASES = frozenset({'recovery_settings','recovery_checking','recovery_scan'})
+WORKSPACE_FIELDS = frozenset({'status','phase','discovered','scanned','input_id','output_id','settings',
+    'run_settings','selection_id','message','active_item','input_path','output_path','selection_query','verification_origin'})
 FILTERS = {'all': '1', 'ready': "status='ready'", 'pending': "status='ready'",
            'running': "status IN ('queued','running','saving','save_pending')", 'processing': "status IN ('queued','running','saving','save_pending')",
            'error': ERROR_WHERE,
@@ -95,7 +97,7 @@ class Workspaces:
                 if column not in item_columns:db.execute('ALTER TABLE items ADD COLUMN '+column+' '+kind)
             db.execute('CREATE INDEX IF NOT EXISTS item_worker_source ON items(pending_job) WHERE pending_job IS NOT NULL')
             workspace_columns={r[1] for r in db.execute('PRAGMA table_info(workspaces)')}
-            for column in ('input_path','output_path','selection_query'):
+            for column in ('input_path','output_path','selection_query','verification_origin'):
                 if column not in workspace_columns:db.execute('ALTER TABLE workspaces ADD COLUMN '+column+' TEXT')
             db.execute("UPDATE workspaces SET phase=CASE WHEN phase='settings' THEN 'recovery_settings' WHEN phase='checking' THEN 'recovery_checking' WHEN status='scanning' THEN 'recovery_scan' ELSE 'recovery' END,status='interrupted',active_item=NULL,"
                        "message='任务已中断；核对目录后手动继续。' WHERE status IN ('scanning','running','pausing')")
@@ -125,8 +127,12 @@ class Workspaces:
 
     def _bump(self, db, ident, **fields):
         """Single indexed state-write boundary; the caller owns its transaction."""
+        if set(fields)-WORKSPACE_FIELDS:
+            raise InputError('工作区状态字段无效。')
         if 'status' in fields and fields['status'] not in WORKSPACE_STATUSES:
             raise InputError('工作区状态无效。')
+        if 'verification_origin' in fields and fields['verification_origin'] not in (None,'done'):
+            raise InputError('输出核验来源状态无效。')
         fields['revision'] = self._ws(db, ident)['revision'] + 1
         db.execute('UPDATE workspaces SET ' + ','.join(k + '=?' for k in fields) + ' WHERE id=?',
                    (*fields.values(), ident))
@@ -617,7 +623,7 @@ class Workspaces:
             db.execute('UPDATE items SET planned=0 WHERE wid=?',(ident,))
             db.execute("UPDATE items SET planned=1,plan_voice=override,status='queued' WHERE wid=? AND selected=1 AND status='ready'",(ident,))
             db.execute('INSERT INTO requests VALUES(?,?,?)',(ident,request,digest))
-            self._bump(db,ident,status='running',phase='generating',output_id=payload['output_folder_id'],output_path=str(directory),run_settings=ws['settings'],message=None)
+            self._bump(db,ident,status='running',phase='generating',output_id=payload['output_folder_id'],output_path=str(directory),run_settings=ws['settings'],verification_origin=None,message=None)
             db.commit()
             self._launch(ident)
         return self.summary(ident)
@@ -868,7 +874,7 @@ class Workspaces:
                 if payload.get('discard_unsaved') is True:
                     self.jobs.discard_workspace_results(ident)
                 db.execute('DELETE FROM items WHERE wid=?',(ident,));db.execute('DELETE FROM files WHERE wid=?',(ident,));db.execute('DELETE FROM requests WHERE wid=?',(ident,))
-                self._bump(db,ident,status='done',phase='finished',active_item=None,run_settings=None,selection_id=uuid.uuid4().hex)
+                self._bump(db,ident,status='done',phase='finished',active_item=None,run_settings=None,verification_origin=None,selection_id=uuid.uuid4().hex)
                 with self.cache_lock:
                     for cache in self.cache.glob(ident+'-*'):
                         cache.unlink(missing_ok=True);self.cache_checks.pop(cache.name,None)
@@ -913,7 +919,8 @@ class Workspaces:
                 previous=self.threads.get(ident)
                 if ws['status']=='scanning' and previous and previous.is_alive():
                     return {'ok':True,'input_folder':source,'output_folder':target}
-                self._bump(db,ident,status='scanning',phase='checking',message='正在核验已有输出。')
+                self._bump(db,ident,status='scanning',phase='checking',
+                           verification_origin='done' if ws['status']=='done' else ws['verification_origin'],message='正在核验已有输出。')
                 cancel=self.scan_cancel[ident]=threading.Event()
                 db.commit()
                 thread=self.threads[ident]=threading.Thread(target=self._verify_restored,args=(ident,cancel),daemon=True)
@@ -921,9 +928,18 @@ class Workspaces:
             elif not pending and ws['phase']=='recovery_checking':
                 # Repair a completed check left in the cancellation phase by an
                 # earlier run. No remaining item requires a worker or network.
-                self._bump(db,ident,status='interrupted' if ws['run_settings'] else 'ready',
-                           phase='recovery' if ws['run_settings'] else 'ready',message='核验完成；可手动继续。')
+                self._finish_verification(db,ident)
         return {'ok':True,'input_folder':source,'output_folder':target}
+
+    def _finish_verification(self,db,ident,pending=False,stopped=False):
+        ws=self._ws(db,ident)
+        completed=bool(ws['verification_origin']=='done' and not pending and not stopped and
+            not db.execute("SELECT 1 FROM items WHERE wid=? AND planned=1 AND (status IS NULL OR status!='saved') LIMIT 1",(ident,)).fetchone())
+        status='done' if completed else ('interrupted' if ws['run_settings'] or pending or stopped else 'ready')
+        phase='done' if completed else ('recovery_checking' if stopped else ('directory_error' if pending else ('recovery' if ws['run_settings'] else 'ready')))
+        message='已有输出已核验，可生成新的已选通话。' if completed else ('核验已停止；恢复目录访问可继续剩余核验。' if stopped else ('部分旧目录待恢复。' if pending else '核验完成；可手动继续。'))
+        self._bump(db,ident,status=status,phase=phase,message=message,
+                   verification_origin=ws['verification_origin'] if pending else None)
 
     def _verify_restored(self,ident,cancel=None):
         cancel=cancel or threading.Event()
@@ -938,6 +954,9 @@ class Workspaces:
                     except (ValueError,OSError):
                         continue
                     state='saved' if receipt['state']=='saved' else ('conflict' if receipt['state']=='conflict' else ('queued' if row['planned'] else 'ready'))
+                    if state!='saved' and ws['verification_origin']:
+                        self._bump(db,ident,verification_origin=None)
+                        ws=self._ws(db,ident)
                     db.execute('UPDATE items SET status=?,error=?,error_code=? WHERE id=?',
                                (state,None if state=='saved' else '先前输出已变化或缺失。','output_conflict' if state=='conflict' else None,row['id']))
                     if index%100==0:
@@ -946,9 +965,7 @@ class Workspaces:
                 # A cancel arriving during the final file hash cannot leave a
                 # resumable-check state when every item has already completed.
                 stopped=self._cancelled(cancel) and pending is not None
-                self._bump(db,ident,status='interrupted' if ws['run_settings'] or pending or stopped else 'ready',
-                           phase='recovery_checking' if stopped else ('directory_error' if pending else ('recovery' if ws['run_settings'] else 'ready')),
-                           message='核验已停止；恢复目录访问可继续剩余核验。' if stopped else ('部分旧目录待恢复。' if pending else '核验完成；可手动继续。'))
+                self._finish_verification(db,ident,pending is not None,stopped)
         except (ValueError,OSError):
             with self.db() as db:self._bump(db,ident,status='interrupted',phase='directory_error',message='输出核验中断，请恢复目录后重试。')
 

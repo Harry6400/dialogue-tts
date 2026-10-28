@@ -332,7 +332,8 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(checking.call_count,1)
         self.assertEqual(finished['saved'],1)
         self.assertEqual(finished['counts'].get('unverified',0),0)
-        self.assertEqual(finished['phase'],'recovery')
+        self.assertEqual(finished['phase'],'done')
+        self.assertEqual(finished['status'],'done')
         self.assertEqual(len(self.calls),1)
         # An older persisted cancellation phase must also converge without
         # inventing a pending item, starting a thread, or repeating file hashes.
@@ -342,6 +343,98 @@ class WorkspaceTests(unittest.TestCase):
             self.work.restore(ident)
             self.assertEqual(checking.call_count,0)
         self.assertEqual(self.work.summary(ident)['phase'],'recovery')
+
+    def test_completed_plan_restore_preserves_new_selection_and_allows_new_start(self):
+        for prefix in ('001','002','003','004'):self.pair(prefix)
+        ident=self.import_ready();first=self.work.page(ident)['items'][0]
+        selected=self.work.select(ident,{'mode':'toggle','item_id':first['id'],'selected':True})
+        self.work.start(ident,{'selection_id':selected['selection_id'],'output_folder_id':self.target['folder_id'],
+                              'consent':True,'request_id':'fictional-first-complete'})
+        self.assertEqual(self.wait(ident)['saved'],1)
+        self.work.select(ident,{'mode':'clear'})
+        selection=self.work.select(ident,{'mode':'all','filter':'ready'})
+        synthesize=self.work.synthesizer
+        self.work.close();self.access.close()
+        self.access=NativeWorkspaceAccess(self.state)
+        self.work=Workspaces(self.state,self.jobs,self.access,synthesizer=synthesize)
+        self.assertEqual(self.work.summary(ident)['status'],'done')
+        self.assertFalse(self.work.summary(ident)['can_edit'])
+        self.work.restore(ident);restored=self.wait(ident,True)
+        self.assertEqual((restored['status'],restored['phase'],restored['saved'],restored['selected'],restored['ready_selected']),('done','done',1,3,3))
+        self.assertTrue(restored['can_edit']);self.assertEqual(restored['selection_id'],selection['selection_id'])
+        self.work.settings(ident,{'settings':{'rate':1.2}});self.wait(ident,True)
+        current=self.work.summary(ident)
+        self.work.start(ident,{'selection_id':current['selection_id'],'output_folder_id':self.target['folder_id'],
+                              'consent':True,'request_id':'fictional-next-complete'})
+        self.assertEqual(self.wait(ident)['saved'],4)
+        self.assertEqual(len(self.calls),4)
+        with self.work.db() as db:self.assertIsNone(self.work._ws(db,ident)['verification_origin'])
+
+    def test_actual_interrupted_plan_remains_locked_after_output_verification(self):
+        self.pair('001');self.pair('002');ident=self.import_ready()
+        selected=self.work.select(ident,{'mode':'toggle','item_id':self.work.page(ident)['items'][0]['id'],'selected':True})
+        self.work.start(ident,{'selection_id':selected['selection_id'],'output_folder_id':self.target['folder_id'],
+                              'consent':True,'request_id':'fictional-partial-plan'})
+        self.wait(ident)
+        with self.work.db() as db:
+            db.execute("UPDATE items SET planned=1,status='queued' WHERE wid=? AND status='ready'",(ident,))
+            self.work._bump(db,ident,status='interrupted',phase='recovery')
+        self.work.close();self.work=Workspaces(self.state,self.jobs,self.access)
+        self.work.restore(ident);restored=self.wait(ident,True)
+        self.assertEqual((restored['status'],restored['phase'],restored['saved']),('interrupted','recovery',1))
+        self.assertFalse(restored['can_edit']);self.assertEqual(restored['counts']['queued'],1)
+        with self.work.db() as db:self.assertIsNone(self.work._ws(db,ident)['verification_origin'])
+
+    def test_completed_plan_with_missing_output_keeps_actual_recovery_semantics(self):
+        self.pair('001');ident=self.import_ready();self.start(ident);self.wait(ident)
+        self.work.close();(self.output/'001.mp3').unlink()
+        self.work=Workspaces(self.state,self.jobs,self.access)
+        self.work.restore(ident);restored=self.wait(ident,True)
+        self.assertEqual((restored['status'],restored['phase']),('interrupted','recovery'))
+        self.assertFalse(restored['can_edit']);self.assertEqual(restored['counts']['queued'],1)
+        with self.work.db() as db:self.assertIsNone(self.work._ws(db,ident)['verification_origin'])
+
+    def test_saved_rows_do_not_reclassify_an_actual_interrupted_workspace(self):
+        self.pair('001');ident=self.import_ready();self.start(ident);self.wait(ident)
+        with self.work.db() as db:self.work._bump(db,ident,status='interrupted',phase='recovery')
+        self.work.close();self.work=Workspaces(self.state,self.jobs,self.access)
+        self.work.restore(ident);restored=self.wait(ident,True)
+        self.assertEqual((restored['status'],restored['phase'],restored['saved']),('interrupted','recovery',1))
+        self.assertFalse(restored['can_edit'])
+
+    def test_completed_verification_origin_survives_cancel_and_another_restart(self):
+        for i in range(3):self.pair(str(i))
+        ident=self.import_ready();self.start(ident);self.wait(ident)
+        self.work.close();self.work=Workspaces(self.state,self.jobs,self.access)
+        entered,release=threading.Event(),threading.Event();verify=self.access.verify_output
+        def delayed(*args):
+            entered.set();release.wait(5);return verify(*args)
+        with patch.object(self.access,'verify_output',side_effect=delayed):
+            self.work.restore(ident);self.assertTrue(entered.wait(3))
+            self.work.action(ident,'cancel-scan',{});release.set();stopped=self.wait(ident,True)
+        self.assertEqual(stopped['phase'],'recovery_checking')
+        with self.work.db() as db:self.assertEqual(self.work._ws(db,ident)['verification_origin'],'done')
+        self.work.close();self.work=Workspaces(self.state,self.jobs,self.access)
+        with self.work.db() as db:self.assertEqual(self.work._ws(db,ident)['verification_origin'],'done')
+        self.work.restore(ident);restored=self.wait(ident,True)
+        self.assertEqual((restored['status'],restored['phase'],restored['saved']),('done','done',3))
+        self.assertTrue(restored['can_edit']);self.assertEqual(len(self.calls),3)
+
+    def test_verified_last_row_before_status_commit_uses_persisted_completion_origin(self):
+        self.pair('001');ident=self.import_ready();self.start(ident);self.wait(ident)
+        with self.work.db() as db:
+            self.work._bump(db,ident,status='interrupted',phase='recovery_checking',verification_origin='done')
+        with patch.object(self.access,'verify_output',side_effect=AssertionError('no unverified rows remain')):
+            self.work.restore(ident)
+        restored=self.work.summary(ident)
+        self.assertEqual((restored['status'],restored['phase']),('done','done'))
+        self.assertTrue(restored['can_edit'])
+        with self.work.db() as db:
+            self.assertIsNone(self.work._ws(db,ident)['verification_origin'])
+            with self.assertRaises(InputError):self.work._bump(db,ident,unknown_field='done')
+            with self.assertRaises(InputError):self.work._bump(db,ident,verification_origin='running')
+        self.work.action(ident,'finish',{})
+        with self.work.db() as db:self.assertIsNone(self.work._ws(db,ident)['verification_origin'])
 
     def test_rename_before_state_commit_recovers_and_protects_complete_audio(self):
         self.pair('001');ident=self.import_ready()
@@ -506,6 +599,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(restored['items'][0]['status'],'conflict')
         self.assertEqual(restored['items'][0]['error_code'],'output_conflict')
         self.assertEqual(restored['issues']['conflict'],1)
+        self.assertEqual(restored['status'],'interrupted')
+        self.assertFalse(restored['can_edit'])
         self.work.action(ident,'finish',{})
         self.assertEqual(self.work.summary(ident)['total'],0)
         self.assertEqual((self.output/'001.mp3').read_bytes(),b'modified')
