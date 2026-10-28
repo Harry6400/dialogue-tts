@@ -1,16 +1,21 @@
-import type {Folder, NativeFailure, Preferences, PreferenceWrite, SaveReceipt, UpdateResult} from '../types/contracts';
+import type {Folder, NativeFailure, Preferences, PreferenceWrite, ReportSaveReceipt, SaveReceipt, UpdateResult} from '../types/contracts';
 
 interface Methods {
   request_close: {args: Record<string, never>; value: {ok: boolean}};
   get_preferences: {args: Record<string, never>; value: Preferences};
   set_preferences: {args: PreferenceWrite; value: {ok: boolean; error?: string}};
+  set_application_preferences: {args: {theme: 'light' | 'dark'}; value: {ok: boolean; error?: string}};
   choose_input_directory: {args: Record<string, never>; value: Folder & {ok: true; files: {name: string; content: string}[]}};
   choose_output_directory: {args: Record<string, never>; value: Folder & {ok: true}};
+  choose_workspace_input: {args: Record<string, never>; value: Folder & {ok: true}};
+  choose_workspace_output: {args: Record<string, never>; value: Folder & {ok: true}};
+  restore_workspace_access: {args: {workspace_id: string}; value: {ok: true; input_folder: Folder; output_folder?: Folder | null}};
   refresh_input_directory: {args: {folder_id: string}; value: Folder & {ok: true; files: {name: string; content: string}[]}};
   check_output_space: {args: {folder_id: string}; value: {ok: true; writable: boolean; free_bytes: number | null}};
   check_completed: {args: {folder_id: string; fingerprints: string[]; expected_names?: Record<string, string>}; value: {ok: true; conflicts?: {fingerprint: string; name: string; error: string}[]; completed: Omit<SaveReceipt, 'ok'>[]}};
   save_download: {args: {resource_path: string}; value: SaveReceipt};
   save_to_output: {args: {resource_path: string; folder_id: string}; value: SaveReceipt};
+  save_workspace_report: {args: {report_id: string}; value: ReportSaveReceipt};
   reveal_output: {args: {folder_id: string}; value: {ok: boolean}};
   check_for_update: {args: Record<string, never>; value: UpdateResult};
   install_update: {args: Record<string, never>; value: UpdateResult};
@@ -66,7 +71,7 @@ export function createNativeBridge(host: NativeHost = window as NativeHost) {
           const request_id = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
           const result = await new Promise<unknown>(resolve => {
             // A user's file panel / installation confirmation must not expire as an ordinary request.
-            const interactive = method.startsWith('choose_') || method === 'install_update' || method === 'save_download';
+            const interactive = method.startsWith('choose_') || method === 'install_update' || method === 'save_download' || method === 'save_workspace_report';
             const pending: Pending = {resolve};
             if (!interactive) pending.timer = setTimeout(() => {shared.pending.delete(request_id); resolve(null);}, 30_000);
             shared.pending.set(request_id, pending);
@@ -77,7 +82,7 @@ export function createNativeBridge(host: NativeHost = window as NativeHost) {
         const fn = host.pywebview?.api?.[method];
         if (!fn) return {kind: 'unsupported'};
         const values = args as Record<string, unknown>;
-        const positional = method === 'set_preferences' ? [args] : method === 'check_completed' ? [values.folder_id, values.fingerprints, values.expected_names] : method === 'save_to_output' ? [values.resource_path, values.folder_id] : method === 'save_download' ? [values.resource_path] : 'folder_id' in values ? [values.folder_id] : [];
+        const positional = method === 'set_preferences' || method === 'set_application_preferences' ? [args] : method === 'restore_workspace_access' ? [values.workspace_id] : method === 'save_workspace_report' ? [values.report_id] : method === 'check_completed' ? [values.folder_id, values.fingerprints, values.expected_names] : method === 'save_to_output' ? [values.resource_path, values.folder_id] : method === 'save_download' ? [values.resource_path] : 'folder_id' in values ? [values.folder_id] : [];
         return normalize<Methods[M]['value']>(await fn(...positional));
       } catch {return {kind: 'unknown', message: '无法确认原生操作结果，请先核对状态。'};}
     },

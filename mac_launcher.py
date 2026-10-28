@@ -2,6 +2,7 @@
 import signal
 import sys
 import threading
+import os
 
 
 def main():
@@ -14,8 +15,15 @@ def main():
     from pathlib import Path
     from web_dialogue.install_lock import InstallationLease
     installation_lease=InstallationLease(Path(sys.executable).parents[2]).acquire() if getattr(sys,"frozen",False) else None
-    from web_dialogue.app import make_server
-    server = make_server(0, bind='127.0.0.1')
+    from web_dialogue.app import make_server, close_resources
+    from web_dialogue.verification_profile import verification_root
+    state_dir = verification_root() or Path.home() / 'Library' / 'Application Support' / 'DialogueTTS'
+    native_token = os.environ.pop('DIALOGUE_NATIVE_TOKEN', None)
+    native_state = os.environ.pop('DIALOGUE_NATIVE_STATE_DIR', None)
+    if native_token and native_state and verification_root() is None:
+        if not Path(native_state).is_absolute(): raise ValueError('原生状态目录必须为绝对路径')
+        state_dir = Path(native_state)
+    server = make_server(0, bind='127.0.0.1', state_dir=state_dir if native_token else None, native_token=native_token)
     server.can_shutdown = True
 
     def stop(_signum, _frame):
@@ -28,7 +36,9 @@ def main():
         server.serve_forever()
     finally:
         server.server_close()
-        server.jobs.close()
+        cleanup=close_resources(server)
+        if not cleanup['ok']:
+            print('资源关闭未完成；已保留持久缓存：'+','.join(cleanup['errors']),file=sys.stderr,flush=True)
         if installation_lease: installation_lease.close()
 
 

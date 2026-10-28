@@ -1,0 +1,26 @@
+.content{display:flex;flex-direction:column;gap:13px;font-size:12px;line-height:1.7;color:var(--muted)}
+.scope{display:flex;gap:10px;padding:12px 13px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+.scope>svg{height:18px;width:18px;margin-top:2px;color:var(--accent-text)}
+.scope strong{display:block;font-size:13px;line-height:1.5;font-weight:600;color:var(--ink);margin-bottom:4px}
+.snapshot{padding:11px 13px;border:1px solid var(--line);border-radius:8px}
+.snapshot>div{display:flex;align-items:baseline;gap:10px;min-width:0}
+.snapshot>div+div{margin-top:5px}
+.snapshot span{flex-shrink:0;font-size:11px}
+.snapshot strong{min-width:0;margin-left:auto;font-size:12px;font-weight:500;color:var(--ink);overflow-wrap:anywhere;text-align:right;font-variant-numeric:tabular-nums}
+.snapshot p{margin-top:7px;font-size:11px}
+.feedback{display:flex;align-items:flex-start;gap:7px;padding:9px 11px;border-radius:7px;background:var(--surface);font-size:12px;line-height:1.6;color:var(--ink)}
+.feedback svg{width:15px;height:15px;margin-top:2px}
+.feedback span{min-width:0;overflow-wrap:anywhere}
+.error{color:var(--danger)}
+.hint{font-size:11px}
+.actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap}
+.primary,.secondary,.cleanup{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:6px 10px;border:1px solid var(--strong);border-radius:6px;background:var(--control-bg);font:inherit;font-size:12px;line-height:1.5;color:var(--ink)}
+.primary{border-color:var(--accent);background:var(--accent);color:var(--accent-ink);font-weight:550}
+.primary:hover:not(:disabled){background:var(--accent);filter:brightness(.96)}
+.primary svg,.secondary svg{height:14px;width:14px}
+.recovery{padding-top:14px;margin-top:2px;border-top:1px solid var(--line)}
+.recovery h3,.recoveryOnly h3{margin:0 0 7px;font-size:12px;line-height:1.5;font-weight:600;color:var(--ink)}
+.recovery p+p,.recoveryOnly p+p{margin-top:6px}
+.cleanup{margin-top:10px;background:transparent;border-color:transparent;padding-left:0;color:var(--accent-text);font-size:11px}
+.cleanup:hover:not(:disabled){background:transparent;text-decoration:underline}
+.recoveryOnly .feedback{margin-top:12px}

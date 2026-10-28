@@ -1,11 +1,14 @@
 """Build a self-contained Windows x64 app, then package only allowlisted files."""
 from pathlib import Path
+import argparse
 import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import zipfile
+from frontend_build import build_frontend, collect_frontend_licenses
+from build_resources import SERVICE_HIDDEN_IMPORTS, service_data
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -13,21 +16,22 @@ sys.path.insert(0, str(ROOT))
 def pyinstaller_command(source, out, work, version_resource):
     return [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
                     '--name', 'DialogueTTS', '--version-file', str(version_resource), '--icon', str(source / 'assets' / 'dialogue.ico'), '--distpath', str(out), '--workpath', str(work),
-                    '--specpath', str(work.parent), '--hidden-import', 'web_dialogue.worker',
-                    '--hidden-import', 'web_dialogue.mp3_frames',
-                    '--hidden-import', 'web_dialogue.updater_cli', '--hidden-import', 'web_dialogue.updater_bridge',
-                    '--hidden-import', 'web_dialogue.safe_updater', '--hidden-import', 'web_dialogue.gitee_provider', '--hidden-import', 'web_dialogue.update_sources', '--hidden-import', 'web_dialogue.update_helper',
-                    '--hidden-import', 'web_dialogue.install_lock', '--hidden-import', 'web_dialogue.update_cancel', '--hidden-import', 'native_windows_updater', '--collect-all', 'webview', '--collect-all', 'pythonnet',
+                    '--specpath', str(work.parent),
+                    *[argument for module in (*SERVICE_HIDDEN_IMPORTS, 'native_windows_updater') for argument in ('--hidden-import', module)], '--collect-all', 'webview', '--collect-all', 'pythonnet',
                     '--hidden-import', 'clr_loader', '--exclude-module', 'PyQt5', '--exclude-module', 'PyQt6',
                     '--exclude-module', 'PySide2', '--exclude-module', 'PySide6', '--exclude-module', 'cefpython3', '--collect-data', 'certifi',
-                    '--collect-submodules', 'edge_tts', '--add-data', f'{source / "web_dialogue" / "index.html"};web_dialogue',
-                    '--add-data', f'{source / "web_dialogue" / "silence.mp3"};web_dialogue',
+                    '--collect-submodules', 'edge_tts',
+                    *[argument for path, destination in service_data(source) for argument in ('--add-data', f'{path};{destination}')],
                     str(source / 'windows_launcher.py')]
 
 def main():
     if sys.platform != 'win32':
         raise SystemExit('Build the Windows binary on a Windows x64 runner.')
-    out = ROOT / 'dist'
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, default=ROOT / 'dist')
+    args = parser.parse_args()
+    out = args.output.resolve()
+    build_frontend()
     from windows_version_resource import write_resource
     version_resource = ROOT / 'build' / 'windows-version.txt'
     write_resource(version_resource)
@@ -52,6 +56,7 @@ def main():
     if (ROOT / 'third_party').is_dir():shutil.copytree(ROOT / 'third_party', stage / 'third_party', dirs_exist_ok=True)
     from collect_licenses import collect
     collect(stage / 'third_party' / 'bundled-runtime')
+    collect_frontend_licenses(stage / 'third_party' / 'bundled-runtime')
     from package_sources import export_sources
     export_sources(ROOT, stage / 'DialogueTTS-Source.zip')
     archive = out / 'DialogueTTS-Windows-x64.zip'

@@ -7,7 +7,7 @@ import unittest
 import urllib.error
 import urllib.request
 from unittest.mock import patch
-from .app import make_server
+from .app import make_server, close_resources
 from .xml_example import XML_EXAMPLE
 XML_PAYLOAD={"format":"xml_pair", "xml_files":XML_EXAMPLE}
 
@@ -22,7 +22,7 @@ class HTTPTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.s.shutdown(); cls.s.server_close(); cls.s.jobs.close()
+        cls.s.shutdown(); cls.s.server_close(); close_resources(cls.s)
 
     def request(self, path, data=None, headers=None):
         h = {'X-App-Token': self.s.token, 'Content-Type': 'application/json'}
@@ -50,6 +50,18 @@ class HTTPTests(unittest.TestCase):
         status, body, h = self.request('/api/config')
         self.assertEqual(json.loads(body)['token'], self.s.token)
         self.assertEqual(h['X-Frame-Options'], 'DENY')
+
+    def test_config_reports_shipped_version_offline_and_mac_build_only_on_mac(self):
+        from .updates import CURRENT_VERSION, MAC_BUILD_NUMBER
+        with patch('web_dialogue.updates.check_update') as check:
+            for platform in ('darwin', 'win32', 'linux'):
+                with self.subTest(platform=platform), patch('web_dialogue.app.sys.platform', platform):
+                    status, body, _ = self.request('/api/config')
+                    config = json.loads(body)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(config['app_version'], CURRENT_VERSION)
+                    self.assertEqual(config['mac_build_number'], MAC_BUILD_NUMBER if platform == 'darwin' else None)
+            check.assert_not_called()
 
     def test_preview_no_synthesis(self):
         status, body, _ = self.request('/api/preview', XML_PAYLOAD)
@@ -102,8 +114,8 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(self.request('/api/jobs',payload)[0],202)
             self.assertEqual(start.call_args.kwargs['fingerprint'],fingerprint)
         with tempfile.TemporaryDirectory() as directory:
-            folder=Path(directory);(folder/'dialogue.mp3').write_bytes(b'fake audio')
-            with patch.object(self.s.jobs, 'snapshot', return_value={'status':'done','fingerprint':fingerprint}), patch.dict(self.s.jobs.items, {'synthetic':{'folder':folder,'filename':'000123.mp3'}}):
+            folder=Path(directory);(folder/'dialogue.mp3').write_bytes((Path(__file__).parent/'silence.mp3').read_bytes())
+            with patch.object(self.s.jobs, 'snapshot', return_value={'status':'done','fingerprint':fingerprint}), patch.dict(self.s.jobs.items, {'synthetic':{'folder':folder,'filename':'000123.mp3','fingerprint':fingerprint,'leases':0}}):
                 status,_,headers=self.request('/api/jobs/synthetic/audio')
                 self.assertEqual(status,200);self.assertEqual(headers['X-Dialogue-Fingerprint'],fingerprint)
                 self.assertEqual(headers['Content-Disposition'],'attachment; filename="000123.mp3"')

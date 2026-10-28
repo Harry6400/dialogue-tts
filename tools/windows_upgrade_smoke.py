@@ -136,15 +136,34 @@ def expected_security_gate(report,result,receipt,launch,*,correct_target,old_pro
                for window in report.get('owned_prompt_windows',[]))
 
 
+def copy_candidate_sources(source):
+    """Use the release source allowlist, plus the exact already-built frontend.
+
+    This includes native_workspace/native_close and dependency notices without
+    copying .git, installed dependencies, private state or previous evidence.
+    """
+    from package_sources import source_files
+    from frontend_build import collect_frontend_licenses
+    source=Path(source);source.mkdir(parents=True,exist_ok=True)
+    for item in source_files(ROOT):
+        destination=source/item.relative_to(ROOT)
+        destination.parent.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(item,destination)
+    frontend=ROOT/'frontend'/'dist'
+    if not (frontend/'index.html').is_file() or not any((frontend/'assets').glob('*.js')):
+        raise RuntimeError('Build the production frontend before the isolated Windows update candidate.')
+    for item in frontend.rglob('*'):
+        if item.is_symlink():raise RuntimeError('The production frontend must not contain symbolic links.')
+        if item.is_file():
+            destination=source/'frontend'/'dist'/item.relative_to(frontend)
+            destination.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copy2(item,destination)
+    collect_frontend_licenses(source/'third_party'/'bundled-runtime')
+
+
 def build_candidate(root, exe):
-    source=root/'candidate-source';source.mkdir()
-    # Explicit source types only; never copy .git, credentials, state or prior evidence.
-    for name in ('windows_launcher.py','native_windows_folders.py','native_windows_updater.py'):
-        shutil.copy2(ROOT/name,source/name)
-    for folder in ('web_dialogue','assets'):
-        dest=source/folder;dest.mkdir()
-        for item in (ROOT/folder).iterdir():
-            if item.is_file() and item.suffix in {'.py','.html','.mp3','.ico','.png'}:shutil.copy2(item,dest/item.name)
+    source=root/'candidate-source'
+    copy_candidate_sources(source)
     updates=source/'web_dialogue/updates.py'
     from web_dialogue.updates import CURRENT_VERSION,version_tuple
     parts=list(version_tuple(CURRENT_VERSION));parts[-1]+=1

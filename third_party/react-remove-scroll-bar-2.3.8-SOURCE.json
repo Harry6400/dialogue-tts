@@ -1,0 +1,10 @@
+{
+  "package": "react-remove-scroll-bar",
+  "version": "2.3.8",
+  "declared_license": "MIT",
+  "reason": "The npm 2.3.8 distribution declares MIT but omits its license text. This is the official project's MIT license text, included without alteration.",
+  "license_url": "https://github.com/theKashey/react-remove-scroll-bar/blob/master/LICENSE",
+  "license_blob_sha": "7c08c3990396ecefd90f99ff5d9a34f26f5b5616",
+  "npm_git_head": "b3b1287aad81def2e2ae707274b74531b61ddbaf",
+  "npm_git_head_note": "The advertised npm gitHead was not available in the declared repository; it is not claimed as the license source."
+}

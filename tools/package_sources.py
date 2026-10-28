@@ -2,7 +2,7 @@
 from pathlib import Path
 import zipfile
 
-ROOT_FILES = ('AGENTS.md', 'PRODUCT.md', 'LICENSE', 'NOTICE', 'README.md',
+ROOT_FILES = ('AGENTS.md', 'PRODUCT.md', 'DESIGN.md', 'LICENSE', 'NOTICE', 'README.md',
               'README_构建与许可.md', 'WINDOWS_开始使用.txt', '.gitignore',
               '.python-version', '.node-version', 'package.json', 'package-lock.json')
 ROOT_DIRS = ('docs', 'web_dialogue', 'native_macos', 'frontend', 'examples', 'assets',

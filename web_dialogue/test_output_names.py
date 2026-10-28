@@ -1,5 +1,6 @@
 """Fictional name and real filesystem regressions; no speech-service requests."""
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -66,9 +67,16 @@ class SaveNameTests(unittest.TestCase):
     response = folder_tests.FolderTests.response
     save = folder_tests.FolderTests.save
     def test_old_generic_receipt_does_not_complete_new_name(self):
-        result=self.save();self.assertTrue(result['ok'])
-        target=self.output/'001.mp3';target.rename(self.output/'dialogue.mp3')
-        self.host._prefs['receipts'][str(self.output)]['a'*64]['name']='dialogue.mp3';self.host._persist()
+        audio=(Path(__file__).parent/'silence.mp3').read_bytes()
+        (self.output/'dialogue.mp3').write_bytes(audio)
+        record={'name':'dialogue.mp3','fingerprint':'a'*64,'size':len(audio),'sha256':hashlib.sha256(audio).hexdigest()}
+        # A genuine pre-ledger preference snapshot is imported by a fresh host.
+        # A generic old result must remain verifiable without completing a new
+        # fixed numeric target, even when both use the same audio fingerprint.
+        (self.root/'prefs.json').write_text(json.dumps({'version':1,'paths':{},'voices':{},
+            'receipts':{str(self.output):{'a'*64:record}},'exports':{}}))
+        self.host=self.new_host()
+        self.out=self.host._authorize(self.output,'output')['folder_id']
         self.assertEqual(len(self.host.check_completed(self.out,['a'*64])['completed']),1)
         checked=self.host.check_completed(self.out,['a'*64],{'a'*64:'001.mp3'})
         self.assertEqual(checked['completed'],[]);self.assertEqual(checked['conflicts'],[])

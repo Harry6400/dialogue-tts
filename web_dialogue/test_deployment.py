@@ -3,7 +3,7 @@ import threading
 import unittest
 import urllib.request
 import urllib.error
-from .app import make_server
+from .app import make_server, close_resources
 
 class DeploymentTests(unittest.TestCase):
     def test_network_mode_requires_https_and_key(self):
@@ -22,6 +22,6 @@ class DeploymentTests(unittest.TestCase):
             auth=base64.b64encode(('tts:'+('a'*30)).encode()).decode()
             self.assertEqual(urllib.request.urlopen(urllib.request.Request(url,headers={'Authorization':'Basic '+auth})).status,200)
         finally:
-            s.shutdown();s.server_close();s.jobs.close()
+            s.shutdown();s.server_close();close_resources(s)
 
 if __name__=='__main__': unittest.main()

@@ -1,5 +1,6 @@
 """Build and statically verify the native Apple Silicon app; never launch it."""
 from pathlib import Path
+import argparse
 import hashlib
 import os
 import platform
@@ -13,6 +14,8 @@ import zipfile
 from collect_licenses import collect
 from package_sources import export_sources
 from package_macos import package_macos
+from frontend_build import build_frontend, collect_frontend_licenses
+from build_resources import SERVICE_HIDDEN_IMPORTS, service_data
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -22,21 +25,26 @@ from web_dialogue.updates import CURRENT_VERSION, MAC_BUILD_NUMBER
 def main():
     if sys.platform != 'darwin' or platform.machine() != 'arm64':
         raise SystemExit('Build on an Apple Silicon Mac with Swift command line tools.')
-    out = ROOT / 'dist'
-    work = ROOT / 'build' / 'macos'
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, default=ROOT / 'dist')
+    parser.add_argument('--work-dir', type=Path, default=ROOT / 'build' / 'macos')
+    args = parser.parse_args()
+    out, work = args.output.resolve(), args.work_dir.resolve()
     work.mkdir(parents=True, exist_ok=True)
+    frontend = build_frontend()
     runtime_licenses = work / 'runtime-licenses'
     collect(runtime_licenses)
+    collect_frontend_licenses(runtime_licenses)
     icon = work / 'dialogue.icns'
     subprocess.run(['/usr/bin/sips', '-s', 'format', 'icns', str(ROOT / 'assets' / 'dialogue.png'),
                     '--out', str(icon)], check=True, stdout=subprocess.DEVNULL)
-    datas = [(str(ROOT / 'web_dialogue' / name), 'web_dialogue') for name in ('index.html', 'silence.mp3')]
+    datas = service_data(ROOT, frontend)
     datas += [(str(ROOT / 'third_party'), 'third_party'), (str(runtime_licenses), 'third_party/bundled-runtime')]
     datas += [(str(ROOT / name), '.') for name in ('LICENSE', 'NOTICE')]
     spec = work / 'dialogue-macos.spec'
     spec.write_text(f'''from PyInstaller.utils.hooks import collect_submodules
 a = Analysis([{str(ROOT / 'mac_launcher.py')!r}], pathex=[{str(ROOT)!r}], binaries=[], datas={datas!r},
-    hiddenimports=collect_submodules('edge_tts') + ['web_dialogue.worker', 'web_dialogue.mp3_frames', 'web_dialogue.xml_pair', 'web_dialogue.updates', 'web_dialogue.fingerprints', 'web_dialogue.safe_updater', 'web_dialogue.gitee_provider', 'web_dialogue.update_sources', 'web_dialogue.update_helper', 'web_dialogue.update_cancel', 'web_dialogue.updater_bridge', 'web_dialogue.updater_cli', 'web_dialogue.install_lock'],
+    hiddenimports=collect_submodules('edge_tts') + {list(SERVICE_HIDDEN_IMPORTS)!r},
     hookspath=[], hooksconfig={{}}, runtime_hooks=[], excludes=['tkinter', 'unittest', 'pytest', 'numpy', 'pydub', 'imageio_ffmpeg'],
     noarchive=False, optimize=1)
 pyz = PYZ(a.pure)
@@ -87,7 +95,8 @@ app = BUNDLE(coll, name='对白.app', icon={str(icon)!r}, bundle_identifier='io.
         '对白 · Mac Apple Silicon 版（macOS 12 或更新）\n\n双击“对白.app”，会打开应用自己的窗口。\n'
         '选择 XML 来源文件夹与结果文件夹，解析预览后选择声音并生成 MP3。\n'
         '生成语音需要联网；无需安装 Python、FFmpeg、模型或配置后端。原文件保持不变。\n'
-        '关窗或点击“退出应用”会结束后台并清理临时音频，请先保存需要的结果。\n'
+        '可一次选择大型 XML 目录；扫描、配对与生成由本机后台分批处理。\n'
+        '退出前可保留未结束任务；重开后核验目录和结果，经确认继续。\n'
         '“检查更新”查找本项目正式版本；按应用提示确认后安装并重启。\n\n'
         '界面使用系统 WKWebView，服务仅在本机临时端口运行，不是外部后端。\n'
         '本包为本机构建，包含临时签名，未经过 Apple 开发者公证。\n'

@@ -1,4 +1,4 @@
-# Folder bridge (v0.3.4)
+# Folder bridge (legacy-compatible native contract)
 
 The frontend has no filesystem authority. Paths are display text only. Native hosts issue opaque `folder_id` capabilities after the user chooses a directory, or restores the persisted native authorization. Invalid restored permissions must set `valid: false`. Restoring preferences never scans XML or submits synthesis.
 
@@ -10,17 +10,21 @@ Windows exposes Promise-returning `window.pywebview.api` methods below. macOS us
 | `check_output_space` | `folder_id` | `{ok,writable,free_bytes}`; a path string is not authorization |
 | `get_preferences` | none | `{ok, input_folder, output_folder, voices, rate, pause_ms}`; folder values are null or `{folder_id,path,valid}` |
 | `set_preferences` | `{voices, rate, pause_ms}` | `{ok}`; only the six builtin zh-CN voice IDs, finite rate 0.5–2, integer pause_ms 0–3000 |
+| `set_application_preferences` | `{theme}` | `{ok}`; theme is exactly light or dark, no sound fields accepted; Windows receives this object |
 | `choose_input_directory` | none | `{ok,folder_id,path,files:[{name,content}]}` |
 | `refresh_input_directory` | `folder_id` | same as input selection, on explicit click only |
 | `choose_output_directory` | none | `{ok,folder_id,path}` |
 | `check_completed` | `folder_id, fingerprints, expected_names?` | `{ok,completed:[{fingerprint,name,path,save_id}],conflicts:[{fingerprint,name,error}]}` |
 | `save_download` | `resource_path` | directory-only manual MP3 save, fixed trusted response filename; does not change batch default folder |
 | `save_to_output` | `resource_path, folder_id` | `{ok,save_id,name,path,fingerprint}` only after durable save |
+| `save_workspace_report` | `report_id` | native CSV save panel and an independent verified CSV receipt; never accepts a webpage destination path |
 | `reveal_output` | `folder_id` | `{ok}` |
 
 Cancellation returns `{cancelled:true}` without changing the current UI selection. Failure returns `{ok:false,error}`. The UI sends `args` as an object for macOS, and positional arguments as listed for Windows (set_preferences receives its object).
 
 Input enumeration is bounded to 100 regular XML files, current directory only, 2 MiB per file, 20 MiB total UTF-8 XML; no symbolic links, recursion or arbitrary JS paths. Backend independently validates these bounds, 50 calls, and a 64 MiB JSON request envelope. Strict grouping uses exact string `callInfo/callReference` and one AGENT plus one USER. Native must not infer pairs.
+
+These enumeration bounds apply to the retained legacy methods, not the v0.4 workspace scanner. The workspace capability, paging, recovery and whole-batch report contract is documented in [workspaces.md](workspaces.md).
 
 Native output accepts only whitelisted local audio routes, validates the response `X-Dialogue-Fingerprint`, and records successful output with its actual byte count and SHA-256. `check_completed` must verify the selected directory's existing actual MP3 against that record, not only filename or fingerprint. Missing/modified files are not completed. No overwrite or numbered suffix: use only the validated numeric `Content-Disposition` filename returned by the local backend. Publish a flushed temporary file atomically without replacing an existing entry; racing files and symlinks are conflicts. On Windows use no-replace rename; on macOS use an exclusive hard link. Keep temporary generated audio in the job on save failure. The frontend's remembered completion map is not authoritative.
 
@@ -33,6 +37,8 @@ Persistent native preferences/cache belong in platform app-data, outside applica
 ## Normal exit and save ledger
 
 `window.dialogueCloseSafety()` returns boolean `busy,running,saving,pending,unsaved`. A missing or malformed result is unknown and blocks ordinary exit. `window.dialogueShowUnsaved()` exposes real generated-audio links. Native save/export receipts identify the actual resource route before clearing the unsaved ledger. Batch saves use the job's captured native capability, never the current mutable folder selection. Unsupported/failed/cancelled native operations cannot represent successful saves.
+
+For legacy WKDownload MP3 saves, the trusted native response binds a capture ID to the canonical name, fingerprint and length. Only native-token endpoints reserve the private destination, validate complete MP3 bytes/hash and save through the same NativeWorkspaceAccess SQLite ledger. Failure retains the complete capture across restart; native Return to Save lists pending captures and revalidates the output grant. Current-session job/audio/normalized/timeline routes remain available until a real save receipt releases their redundant source. A missing old route does not prevent saving a complete capture. Explicit abandonment is separate from saving persistent workspace progress; `legacy_unsaved` is a boolean safety field for this distinction. Unknown, active or leased captures block cleanup. The old JSON writer is retained only for migration regressions and has no production save caller; ZIP download callbacks remain separate.
 
 macOS verification candidates may receive native process arguments `--verification-state ABSOLUTE_DIRECTORY`, using a separate preferences file. This is not a webpage method and grants no JS filesystem path authority. Normal launches continue to use platform app-data. For complete verification transactions, an explicit native OS environment `DIALOGUE_VERIFICATION_STATE_ROOT` selects the same private profile for preferences, helper plans and receipts; Python requires an absolute, non-symlink, current-user-owned directory with private permissions. The helper forwards only this explicit verification profile through LaunchServices. Normal launches do not set it.
 
