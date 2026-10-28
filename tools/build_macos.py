@@ -15,6 +15,7 @@ from collect_licenses import collect
 from package_sources import export_sources
 from package_macos import package_macos
 from frontend_build import build_frontend, collect_frontend_licenses
+from build_resources import SERVICE_HIDDEN_IMPORTS, service_data
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -37,14 +38,13 @@ def main():
     icon = work / 'dialogue.icns'
     subprocess.run(['/usr/bin/sips', '-s', 'format', 'icns', str(ROOT / 'assets' / 'dialogue.png'),
                     '--out', str(icon)], check=True, stdout=subprocess.DEVNULL)
-    datas = [(str(ROOT / 'web_dialogue' / name), 'web_dialogue') for name in ('index.html', 'silence.mp3')]
-    datas.append((str(frontend), 'frontend/dist'))
+    datas = service_data(ROOT, frontend)
     datas += [(str(ROOT / 'third_party'), 'third_party'), (str(runtime_licenses), 'third_party/bundled-runtime')]
     datas += [(str(ROOT / name), '.') for name in ('LICENSE', 'NOTICE')]
     spec = work / 'dialogue-macos.spec'
     spec.write_text(f'''from PyInstaller.utils.hooks import collect_submodules
 a = Analysis([{str(ROOT / 'mac_launcher.py')!r}], pathex=[{str(ROOT)!r}], binaries=[], datas={datas!r},
-    hiddenimports=collect_submodules('edge_tts') + ['web_dialogue.worker', 'web_dialogue.mp3_frames', 'web_dialogue.xml_pair', 'web_dialogue.updates', 'web_dialogue.fingerprints', 'web_dialogue.safe_updater', 'web_dialogue.gitee_provider', 'web_dialogue.update_sources', 'web_dialogue.update_helper', 'web_dialogue.update_cancel', 'web_dialogue.updater_bridge', 'web_dialogue.updater_cli', 'web_dialogue.install_lock'],
+    hiddenimports=collect_submodules('edge_tts') + {list(SERVICE_HIDDEN_IMPORTS)!r},
     hookspath=[], hooksconfig={{}}, runtime_hooks=[], excludes=['tkinter', 'unittest', 'pytest', 'numpy', 'pydub', 'imageio_ffmpeg'],
     noarchive=False, optimize=1)
 pyz = PYZ(a.pure)
