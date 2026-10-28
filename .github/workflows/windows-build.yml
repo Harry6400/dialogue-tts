@@ -59,6 +59,15 @@ jobs:
           $env:DIALOGUE_RELEASE_NEW_EXE = $newExe[0].FullName
           python tools/windows_upgrade_smoke.py $oldExe[0].FullName dist/windows-upgrade-confirmed.json
           exit $LASTEXITCODE
+      - name: Retain confirmed upgrade evidence separately
+        if: always() && inputs.confirm_upgrade == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-upgrade-confirmed
+          if-no-files-found: warn
+          path: |
+            dist/windows-upgrade-confirmed.json
+            dist/windows-update-*.png
       - name: Retain the real build and verification evidence
         if: always()
         uses: actions/upload-artifact@v4
