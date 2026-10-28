@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -176,6 +177,17 @@ class AudioCaptureHTTPTests(unittest.TestCase):
             self.assertEqual(response.status,200);self.assertEqual(response.read(),self.audio)
         for kind in ('normalized','timeline'):
             self.assertEqual(self.request(self.route.rsplit('/',1)[0]+'/'+kind)[0],200)
+        # Receiving Content-Length bytes can precede the handler's finally
+        # block on Windows. Wait for its lease to close before testing release.
+        job_id = self.route.split('/')[3]
+        deadline = time.monotonic() + 5
+        while True:
+            with self.server.jobs.lock:
+                readers = self.server.jobs.items[job_id]['leases']
+            if not readers or time.monotonic() >= deadline:
+                break
+            time.sleep(.005)
+        self.assertEqual(readers, 0, 'HTTP result handler did not close its lease')
 
     def test_complete_keeps_current_manual_audio_and_auxiliary_links_until_saved(self):
         job_id=self.current_manual_source()
