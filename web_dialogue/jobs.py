@@ -17,6 +17,8 @@ import uuid
 from .normalize import InputError
 from .mp3_frames import validated_file_digest
 from .output_names import valid_output_name
+from .speech_metadata import compact_timing, read_metadata, safe_diagnostics, MAX_METADATA
+from .speech_settings import DEFAULT_RETRY_ATTEMPTS, validate_retry_attempts
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -83,6 +85,19 @@ def _pid_alive(pid):
 class Jobs:
     def __init__(self, timeout_seconds=900, *, state_dir=None):
         self.timeout_seconds = timeout_seconds
+        self._network_file = Path(state_dir) / 'connection.json' if state_dir is not None else None
+        self.connection_mode = 'direct'
+        self.retry_attempts = DEFAULT_RETRY_ATTEMPTS
+        if self._network_file and self._network_file.exists():
+            settings = json.loads(self._network_file.read_text())
+            self.connection_mode = settings.get('mode', 'direct')
+            self.retry_attempts = settings.get('retry_attempts', DEFAULT_RETRY_ATTEMPTS)
+            if self.connection_mode not in ('direct', 'system_proxy'):
+                raise InputError('语音连接设置无效。')
+            try:
+                validate_retry_attempts(self.retry_attempts)
+            except ValueError as exc:
+                raise InputError('语音连接尝试次数设置无效。') from exc
         self.request_ids = {}
         self.temp = tempfile.TemporaryDirectory(prefix="dialogue-tts-")
         self.root = Path(self.temp.name)
@@ -104,6 +119,37 @@ class Jobs:
             os.chmod(root, 0o700)
             self._persistent_root = root
             self._recover()
+
+    def _save_network_settings(self, mode, retry_attempts):
+        if self._network_file:
+            staging = self._network_file.with_suffix('.tmp')
+            staging.write_text(json.dumps({'mode': mode, 'retry_attempts': retry_attempts}), encoding='utf-8')
+            os.chmod(staging, 0o600)
+            staging.replace(self._network_file)
+
+    def _ensure_network_settings_mutable(self):
+        if self.has_running() or self._batch_owner:
+            raise InputError('请先暂停合成，再修改语音连接设置。')
+
+    def set_connection_mode(self, mode):
+        if mode not in ('direct', 'system_proxy'):
+            raise InputError('语音连接方式无效。')
+        with self.lock:
+            self._ensure_network_settings_mutable()
+            self._save_network_settings(mode, self.retry_attempts)
+            self.connection_mode = mode
+        return {'ok': True, 'connection_mode': mode}
+
+    def set_retry_attempts(self, value):
+        try:
+            attempts = validate_retry_attempts(value)
+        except ValueError as exc:
+            raise InputError('连接尝试次数必须是 1–30 的整数。') from exc
+        with self.lock:
+            self._ensure_network_settings_mutable()
+            self._save_network_settings(self.connection_mode, attempts)
+            self.retry_attempts = attempts
+        return {'ok': True, 'retry_attempts': attempts}
 
     @property
     def batch_active(self):
@@ -188,7 +234,8 @@ class Jobs:
         return {'version': 1, 'id': ident, 'filename': item['filename'], 'fingerprint': item.get('fingerprint'),
                 'total': item['total'], 'request_binding': item['request_binding'], 'context': item.get('context'),
                 'pid': item.get('process').pid if item.get('process') is not None else item.get('pid'),
-                'size': item.get('size'), 'sha256': item.get('sha256')}
+                'size': item.get('size'), 'sha256': item.get('sha256'),
+                'timing': item.get('timing'), 'diagnostics': item.get('diagnostics')}
 
     def _persist(self, ident, item):
         if not item.get('persistent'): return
@@ -214,10 +261,23 @@ class Jobs:
         info = path.lstat()
         token = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
         if item.get('checked') != token:
-            size, digest = validated_file_digest(path)
+            size, digest, duration = validated_file_digest(path, with_duration=True)
             if item.get('sha256') and (item['sha256'] != digest or item['size'] != size):
                 raise InputError('持久合成结果校验不一致。')
-            item.update(size=size, sha256=digest, checked=token)
+            item.update(size=size, sha256=digest, duration_ms=duration, checked=token)
+        finished = not item.get('orphan_pid_pending') and (item.get('process') is None or item['process'].poll() is not None)
+        if finished and not item.get('metadata_captured'):
+            item['timing'] = compact_timing(item.get('timing'), item['sha256'], item['total'])
+            try:
+                item['timing'] = compact_timing(read_metadata(item['folder'] / 'timeline.json'), item['sha256'], item['total'])
+            except (OSError, ValueError, TypeError): pass
+            try:
+                item['diagnostics'] = safe_diagnostics(read_metadata(item['folder'] / 'worker_status.json').get('diagnostics'))
+            except (OSError, ValueError, TypeError): pass
+            if item.get('timing') and item['timing']['duration_ms'] != item['duration_ms']:
+                item['timing'] = None
+            self._persist(ident, item)
+            item['metadata_captured'] = True
         if not item.get('persisted_result'):
             self._persist(ident, item)
             item['persisted_result'] = True
@@ -225,7 +285,8 @@ class Jobs:
         if item.get('persistent') and (item.get('context') is not None or item.get('recovered') or self._closing) and not item.get('orphan_pid_pending') and (item.get('process') is None or item['process'].poll() is not None):
             self._clean_auxiliary(item)
         return {'id': ident, 'filename': item['filename'], 'fingerprint': item.get('fingerprint'),
-                'context': item.get('context'), 'size': item['size'], 'sha256': item['sha256']}
+                'context': item.get('context'), 'size': item['size'], 'sha256': item['sha256'],
+                'timing': item.get('timing'), 'diagnostics': item.get('diagnostics')}
 
     def _recover(self):
         import re
@@ -235,7 +296,7 @@ class Jobs:
                 if not stat.S_ISDIR(info.st_mode) or folder.is_symlink() or not re.fullmatch('[a-f0-9]{32}', folder.name): raise ValueError('unknown')
                 metadata = folder / 'recovery.json'
                 info = metadata.lstat()
-                if not _regular(info) or info.st_size > 16384: raise ValueError('metadata')
+                if not _regular(info) or info.st_size > MAX_METADATA: raise ValueError('metadata')
                 value = json.loads(metadata.read_text(encoding='utf-8'))
                 if value.get('version') != 1 or value.get('id') != folder.name or not valid_output_name(value.get('filename')) or not re.fullmatch('[a-f0-9]{64}', value.get('fingerprint') or ''): raise ValueError('binding')
                 context = value.get('context')
@@ -243,7 +304,8 @@ class Jobs:
                 item = {'folder': folder, 'process': None, 'timer': None, 'pid': value.get('pid'), 'total': value['total'],
                         'filename': value['filename'], 'fingerprint': value['fingerprint'], 'request_binding': value['request_binding'],
                         'context': context, 'size': value.get('size'), 'sha256': value.get('sha256'), 'persistent': True,
-                        'audition': False, 'cancelled': False, 'timed_out': False, 'leases': 0, 'recovered': True}
+                        'audition': False, 'cancelled': False, 'timed_out': False, 'leases': 0, 'recovered': True,
+                        'timing': value.get('timing'), 'diagnostics': safe_diagnostics(value.get('diagnostics'))}
                 if (folder / 'dialogue.mp3').exists():
                     if _pid_alive(value.get('pid')):
                         item['orphan_pid_pending'] = True
@@ -300,6 +362,10 @@ class Jobs:
                 handle.close(); raise InputError('合成结果身份已变化。')
             item['leases'] += 1
             return ResultLease(self, ident, handle, actual.st_size, item['filename'] if kind == 'audio' else names[kind], item.get('fingerprint') if kind == 'audio' else None, item.get('sha256') if kind=='audio' else None, target)
+
+    def result_metadata(self, ident):
+        with self.lock:
+            return self._fact(ident, self.items[ident])
 
     def recovery_context(self, ident):
         with self.lock:
@@ -359,10 +425,12 @@ class Jobs:
             item = {'folder':folder,'process':None,'timer':None,'total':len(script['lines']),
                     'fingerprint':fingerprint,'filename':filename,'request_binding':binding,'audition':audition,
                     'started':time.monotonic(),'cancelled':False,'timed_out':False,'persistent':persistent,
-                    'context':recovery_context,'leases':0}
+                    'context':recovery_context,'leases':0,'retry_attempts':self.retry_attempts}
             self.items[ident] = item
             try:
-                (folder / "normalized.json").write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
+                (folder / "normalized.json").write_text(json.dumps(
+                    {**script, 'connection_mode': self.connection_mode, 'retry_attempts': self.retry_attempts},
+                    ensure_ascii=False, indent=2), encoding="utf-8")
                 self._persist(ident,item)
                 with open(folder / "process.log", "wb") as log:
                     item['process'] = subprocess.Popen(
@@ -429,7 +497,8 @@ class Jobs:
             if ident not in self.items:
                 raise KeyError("任务不存在，或服务器已重启。")
             item = self.items[ident]
-            result = {"id": ident, "status": "queued", "completed": 0, "total": item["total"], "filename": item['filename']}
+            result = {"id": ident, "status": "queued", "completed": 0, "total": item["total"],
+                      "filename": item['filename'], "attempt_limit": item.get('retry_attempts', DEFAULT_RETRY_ATTEMPTS)}
             if item.get('recovered') or item.get('result_validated') and (item.get('process') is None or item['process'].poll() is not None):
                 result.update(status='done',completed=item['total'])
             status_file = item["folder"] / "worker_status.json"

@@ -16,9 +16,7 @@ export function WorkspaceProgress({workspace}: {workspace: WorkspaceSummary}) {
     : `已保存 ${count(workspace.saved)} 通 · 需处理 ${count(workspace.error)} 通`;
   return <div className={styles.progressSummary} data-testid={scanning ? 'scan-progress' : 'task-progress'}>
     <div><strong role="status">{label}</strong><span>{detail}</span></div>
-    {scanning
-      ? <div className={progressStyles.track} role="progressbar" aria-label="扫描进度" aria-valuetext={`${label}，${detail}`}><span className={progressStyles.activity}/></div>
-      : <progress aria-label="生成进度" max={Math.max(1, workspace.total)} value={workspace.processed}/>}
+    {scanning && <div className={progressStyles.track} role="progressbar" aria-label="扫描进度" aria-valuetext={`${label}，${detail}`}><span className={progressStyles.activity}/></div>}
     {workspace.message && <p>{workspace.message}</p>}
     {workspace.active_item && <p>当前：{workspace.active_item.filename || '正在处理通话'}</p>}
   </div>;

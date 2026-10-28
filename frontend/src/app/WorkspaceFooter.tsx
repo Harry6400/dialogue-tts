@@ -14,7 +14,7 @@ function footerState({model, busy}: Props, workspace: WorkspaceSummary) {
 function PrimaryAction({props, workspace, state}: {props: Props; workspace: WorkspaceSummary; state: ReturnType<typeof footerState>}) {
   const {model,onStart} = props;
   if (state.kind === 'cancel') return <button className={styles.secondaryButton} disabled={!state.enabled} onClick={() => void model.mutate({kind: 'cancel', label: '停止扫描'}, () => model.api.cancelWorkspaceScan(workspace.id))}>停止扫描</button>;
-  if (state.kind === 'pause') return <button data-testid="pause" className={styles.secondaryButton} disabled={!state.enabled} onClick={() => void model.mutate({kind: 'pause', label: '保存进度'}, () => model.api.pauseWorkspace(workspace.id))}><Icon name="pause"/>{workspace.status === 'pausing' ? '保存进度中…' : '暂停'}</button>;
+  if (state.kind === 'pause') return <button data-testid="pause" className={styles.secondaryButton} disabled={!state.enabled} onClick={() => void model.mutate({kind: 'pause', label: '保存进度'}, () => model.api.pauseWorkspace(workspace.id))}><Icon name="pause"/>{workspace.status === 'pausing' ? '本通结束后暂停…' : '暂停'}</button>;
   return <button data-testid={state.resumable ? 'resume' : 'generate'} className={styles.primaryButton} disabled={!state.enabled} title={state.help || undefined} aria-describedby={state.help ? 'generate-help' : undefined} onClick={() => void onStart()}><Icon name="play"/>{state.label}</button>;
 }
 function RetryActions({props, workspace}: {props: Props; workspace: WorkspaceSummary}) {

@@ -13,6 +13,13 @@
 .appearance button svg{width:14px;height:14px}
 .appearance button[aria-pressed=true]{background:var(--control-bg);color:var(--ink);border-color:var(--line);box-shadow:0 1px 2px rgba(0,0,0,.04)}
 .appearance button:focus-visible,.action:focus-visible,.install:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.retryRow{margin:0;}
+.retryLabel{display:block;font-size:13px;line-height:1.5;font-weight:550;cursor:pointer}
+.retryControl{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.retryInput{width:72px;min-height:35px;padding:5px 8px;border:1px solid var(--strong);border-radius:7px;background:var(--control-bg);color:var(--ink);font:inherit;font-size:13px;font-variant-numeric:tabular-nums;text-align:center;box-shadow:var(--control-shadow)}
+.retryInput:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.retryFeedback{margin:0 0 0 42px;font-size:12px;line-height:1.5;color:var(--muted)}
+.retryFeedback[role=alert]{color:var(--danger)}
 .action,.install{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:35px;padding:5px 10px;border:1px solid var(--strong);border-radius:7px;background:var(--control-bg);color:var(--ink);box-shadow:var(--control-shadow);font-size:12px;line-height:1.5;font-weight:500;white-space:nowrap;flex-shrink:0}
 .action svg,.install svg{width:15px;height:15px}
 .action:hover:not(:disabled){border-color:var(--control-hover-border);background:var(--control-hover-bg)}

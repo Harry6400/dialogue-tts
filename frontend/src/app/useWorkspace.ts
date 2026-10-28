@@ -253,7 +253,7 @@ export function useWorkspace() {
   const changeFilter = useCallback((value: WorkspaceFilter) => {setFilter(value); setIssue(''); setPage(1); setIssueNotice(''); setIssueFocus(null); nextIssueTarget.current = null;}, []);
   const changeIssue = useCallback((value: WorkspaceIssue) => {setFilter('error'); setIssue(value); setPage(1); setIssueNotice(''); setIssueFocus(null); nextIssueTarget.current = null;}, []);
   const consumeIssueFocus = useCallback(() => setIssueFocus(null), []);
-  return {api, native, config, preferences, workspaces, workspace, items, matchedTotal, query, filter, issue, issueNotice, issueFocus, page, activeId, detail, detailLoading, loading, error, pending, safety, hiddenSelection, output: workspace ? workspace.output_folder || null : output, navigateCall, accept, refresh, perform, nativeValue, mutate, importFolder, chooseOutput, restoreAccess, replaceInput, select, chooseWorkspace, nextIssue, consumeIssueFocus, setError, setActiveId, setQuery: changeQuery, setFilter: changeFilter, setIssue: changeIssue, setPage};
+  return {api, native, config, setConfig, preferences, workspaces, workspace, items, matchedTotal, query, filter, issue, issueNotice, issueFocus, page, activeId, detail, detailLoading, loading, error, pending, safety, hiddenSelection, output: workspace ? workspace.output_folder || null : output, navigateCall, accept, refresh, perform, nativeValue, mutate, importFolder, chooseOutput, restoreAccess, replaceInput, select, chooseWorkspace, nextIssue, consumeIssueFocus, setError, setActiveId, setQuery: changeQuery, setFilter: changeFilter, setIssue: changeIssue, setPage};
 }
 
 export type WorkspaceModel = ReturnType<typeof useWorkspace>;

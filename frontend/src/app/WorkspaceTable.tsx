@@ -1,10 +1,11 @@
+import {CallProgress} from './CallProgress';
 import {WorkspacePagination} from './WorkspacePagination';
 import {useEffect, useRef} from 'react';
 import {canEdit, type WorkspaceModel} from './useWorkspace';
 import {Icon} from './Icon';
 import styles from './App.module.css';
 
-import {statusLabels, selectable, count, itemTitle, shortVoiceName, voiceSource} from './format';
+import {selectable, count, itemTitle, shortVoiceName, voiceSource} from './format';
 
 function emptyCopy(model: WorkspaceModel) {
   if(model.loading)return {message:'正在读取通话…',hint:'',clear:false};
@@ -52,10 +53,10 @@ export function WorkspaceTable({model, onReview, context = 'overview', active = 
           <td><button id={context + '-call-' + item.id} className={styles.fileButton} onClick={() => {model.setActiveId(item.id); onActivate?.();}} onDoubleClick={onReview} onKeyDown={event => {
             if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {event.preventDefault(); move(index, event.key === 'ArrowDown' ? 1 : -1);}
             if (event.key === 'Enter') {event.preventDefault(); model.setActiveId(item.id); onReview();}
-          }} aria-pressed={activeId === item.id}>{itemTitle(item)}</button>{item.error && <span className={styles.rowError} title={item.error}>{item.error}</span>}</td>
+          }} aria-pressed={activeId === item.id}>{itemTitle(item)}</button><span className={styles.rowError} title={item.error || undefined}>{item.error}</span></td>
           <td className={styles.segmentColumn}>{item.line_count===undefined?'—':count(item.line_count)}</td>
           <td className={styles.voiceColumn}><span>{shortVoiceName(item.customer_voice ? voices.get(item.customer_voice) : undefined)}</span>{item.voice_source && <span className={styles.cellSub} title={item.voice_source}>{voiceSource(item.voice_source)}</span>}</td>
-          <td><span className={`${styles.status} ${['invalid', 'synthesis_error', 'save_error', 'conflict'].includes(item.status) ? styles.statusWarning : ''} ${item.status === 'saved' ? styles.statusSaved : ''}`}>{item.status === 'saved' && <Icon name="check"/>}{item.status === 'running' && <span className={styles.activityDot}/>} {statusLabels[item.status] || item.status}</span></td>
+          <td><CallProgress item={item} progress={workspace?.active_item} pausing={workspace?.status==='pausing'}/></td>
           <td><button className={styles.iconButton} aria-label={'核对 ' + (item.filename || item.id)} onClick={() => {model.setActiveId(item.id); onReview();}}><Icon name="arrow"/></button></td>
         </tr>)}</tbody>
       </table>

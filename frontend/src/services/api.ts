@@ -1,4 +1,4 @@
-import type {BatchPayload, BatchPreview, BatchSnapshot, Config, JobSnapshot, NextIssue, PairPayload, Preview, SelectionResult, SelectionWrite, SoundSettings, VoiceId, WorkspaceDetail, WorkspaceIssue, WorkspacePage, WorkspaceQuery, WorkspaceReport, WorkspaceSafety, WorkspaceSnapshot, WorkspaceSummary} from '../types/contracts';
+import type {PlaybackTimeline, BatchPayload, BatchPreview, BatchSnapshot, Config, JobSnapshot, NextIssue, PairPayload, Preview, SelectionResult, SelectionWrite, SoundSettings, VoiceId, WorkspaceDetail, WorkspaceIssue, WorkspacePage, WorkspaceQuery, WorkspaceReport, WorkspaceSafety, WorkspaceSnapshot, WorkspaceSummary} from '../types/contracts';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number | null, readonly outcome: 'failed' | 'unknown' = 'failed') {super(message);}
@@ -32,6 +32,9 @@ export class ApiClient {
     }
     return data as T;
   }
+
+  setConnectionMode(connection_mode: 'direct' | 'system_proxy') {return this.request<{ok: boolean; connection_mode: 'direct' | 'system_proxy'}>('/api/network', {connection_mode});}
+  setRetryAttempts(retry_attempts: number) {return this.request<{ok: boolean; retry_attempts: number}>('/api/network', {retry_attempts});}
 
   async getConfig(): Promise<Config> {
     const config = await this.request<Config>('/api/config');
@@ -78,6 +81,7 @@ export class ApiClient {
   discardWorkspaceReport(id: string) {return this.request<{ok: true; report_id: string}>('/api/reports/' + this.id(id) + '/discard', {});}
   cancelPendingReports() {return this.request<{ok: true; cancelled: number}>('/api/reports/cancel-pending', {});}
   setWorkspaceFolders(id: string, folders: {input_folder_id?: string; output_folder_id?: string}) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/folders', folders);}
+  getWorkspaceTimeline(id: string, itemId: string) {return this.request<PlaybackTimeline>('/api/workspaces/'+id+'/items/'+itemId+'/timeline');}
   workspaceAudio(id: string, itemId: string) {return this.workspacePath(id) + '/items/' + this.id(itemId) + '/audio';}
   audition(settings: SoundSettings, requestId: string) {return this.request<JobSnapshot>('/api/audition', {...settings, consent: true, request_id: requestId});}
   private workspacePath(id: string) {return '/api/workspaces/' + this.id(id);}

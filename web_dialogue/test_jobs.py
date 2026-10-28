@@ -26,6 +26,60 @@ class JobsTests(unittest.TestCase):
     def start(self, *args, **kwargs):
         return self.jobs.start(*args, filename='001.mp3', **kwargs)
 
+    def test_connection_mode_default_snapshot_and_active_guard(self):
+        import json
+        self.assertEqual(self.jobs.connection_mode, 'direct')
+        self.jobs.set_connection_mode('system_proxy')
+        job=self.start(self.script)
+        saved=json.loads((self.jobs.items[job['id']]['folder']/'normalized.json').read_text(encoding='utf-8'))
+        self.assertEqual(saved['connection_mode'], 'system_proxy')
+        self.assertNotIn('connection_mode', self.script)
+        with self.assertRaises(InputError):self.jobs.set_connection_mode('direct')
+        self.jobs.cancel(job['id'])
+        self.jobs.set_connection_mode('direct')
+        with self.assertRaises(InputError):self.jobs.set_connection_mode('automatic')
+
+    def test_connection_mode_persists_across_restart(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as state:
+            first=Jobs(state_dir=state)
+            self.assertEqual(first.connection_mode,'direct')
+            first.set_connection_mode('system_proxy');first.close()
+            second=Jobs(state_dir=state)
+            self.assertEqual(second.connection_mode,'system_proxy');second.close()
+
+    def test_retry_attempts_default_legacy_persistence_boundaries_and_snapshot(self):
+        import json, tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as state:
+            settings=Path(state)/'connection.json'
+            settings.write_text(json.dumps({'mode':'system_proxy'}))
+            manager=Jobs(state_dir=state)
+            self.assertEqual(manager.retry_attempts,5)
+            self.assertEqual(manager.set_retry_attempts(1),{'ok':True,'retry_attempts':1})
+            self.assertEqual(manager.set_retry_attempts(30),{'ok':True,'retry_attempts':30})
+            self.assertEqual(json.loads(settings.read_text()),{'mode':'system_proxy','retry_attempts':30})
+            manager.close()
+            restored=Jobs(state_dir=state)
+            self.assertEqual(restored.retry_attempts,30)
+            restored.close()
+        for invalid in (0,31,1.0,True,False,'5',None):
+            with self.subTest(invalid=invalid), self.assertRaises(InputError):
+                self.jobs.set_retry_attempts(invalid)
+        self.jobs.set_connection_mode('system_proxy')
+        self.jobs.set_retry_attempts(30)
+        self.assertEqual(self.jobs.connection_mode,'system_proxy')
+        job=self.start(self.script)
+        snapshot=json.loads((self.jobs.items[job['id']]['folder']/'normalized.json').read_text(encoding='utf-8'))
+        self.assertEqual(snapshot['retry_attempts'],30)
+        with self.assertRaises(InputError):self.jobs.set_retry_attempts(1)
+        self.jobs.cancel(job['id'])
+        self.jobs.set_retry_attempts(5)
+        self.jobs.set_connection_mode('direct')
+        self.jobs.claim_batch('active-batch')
+        with self.assertRaises(InputError):self.jobs.set_retry_attempts(1)
+        self.jobs.release_batch('active-batch')
+
     def test_filename_is_bound_to_request_id(self):
         first=self.jobs.start(self.script,'name-request',filename='000123.mp3')
         self.assertEqual(first['filename'],'000123.mp3')

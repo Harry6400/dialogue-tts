@@ -30,9 +30,8 @@ it.each(['ready','cancelled','error','interrupted','done'] as const)('removes sc
   expect(screen.getByText('真实结果说明')).toBeVisible();
 });
 
-it('keeps generation progress determinate and based on the existing processed count', () => {
+it('does not expose the old whole-batch generation bar', () => {
   render(<WorkspaceProgress workspace={summary({status:'running',phase:'generating',total:50,processed:12,saved:10,error:2})}/>);
-  const track = screen.getByRole('progressbar', {name:'生成进度'});
-  expect(track).toHaveAttribute('max','50'); expect(track).toHaveAttribute('value','12');
+  expect(screen.queryByRole('progressbar', {name:'生成进度'})).not.toBeInTheDocument();
   expect(screen.getByText('已保存 10 通 · 需处理 2 通')).toBeVisible();
 });

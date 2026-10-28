@@ -60,7 +60,7 @@ def join_segments(parts, pauses, silence_data):
     return bytes(output), spans, frame_count * FRAME_MS
 
 
-def validated_file_digest(path):
+def validated_file_digest(path, *, with_duration=False):
     """Validate one bounded MP3 and hash through the same no-follow fd.
 
     Unlike parse_frames this keeps neither the complete file nor its frames
@@ -100,4 +100,5 @@ def validated_file_digest(path):
         after=os.fstat(handle.fileno())
         if (after.st_size,after.st_mtime_ns,after.st_ctime_ns)!=(info.st_size,info.st_mtime_ns,info.st_ctime_ns):
             raise ValueError('核验期间缓存已变化。')
-        return info.st_size,digest.hexdigest()
+        result=(info.st_size,digest.hexdigest())
+        return (*result,frames*FRAME_MS) if with_duration else result
