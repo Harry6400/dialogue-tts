@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
+import type {Operation} from './operation';
 import {ApiClient} from '../services/api';
 import {createNativeBridge, type Outcome} from '../services/native';
 import type {Config, Folder, Preferences, SelectionWrite, WorkspaceDetail, WorkspaceFilter, WorkspaceIssue, WorkspaceItem, WorkspaceSafety, WorkspaceSummary} from '../types/contracts';
@@ -27,7 +28,7 @@ export function useWorkspace() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [pending, setPending] = useState('');
+  const [pending, setPending] = useState<Operation | null>(null);
   const [revision, setRevision] = useState(0);
   const [detailRevision, setDetailRevision] = useState(0);
   const [hiddenSelection, setHiddenSelection] = useState(0);
@@ -136,11 +137,11 @@ export function useWorkspace() {
     void load(); return () => {alive = false;};
   }, [api, workspaceId, activeId, detailRevision]);
 
-  async function perform(label: string, operation: () => Promise<void>) {
+  async function perform(context: Operation, operation: () => Promise<void>) {
     if (pendingRef.current) return;
-    pendingRef.current = true; setPending(label); setError('');
+    pendingRef.current = true; setPending(context); setError('');
     try {await operation();} catch (issue) {setError(messageOf(issue));}
-    finally {pendingRef.current = false; setPending('');}
+    finally {pendingRef.current = false; setPending(null);}
   }
 
   function nativeValue<T>(result: Outcome<T>): T | null {
@@ -150,7 +151,7 @@ export function useWorkspace() {
   }
 
   async function importFolder() {
-    await perform('读取来源文件夹', async () => {
+    await perform({kind: 'import', label: '读取来源文件夹'}, async () => {
       if (!native.current) return;
       const folder = nativeValue(await native.current.call('choose_workspace_input', {}));
       if (!folder) return;
@@ -160,7 +161,7 @@ export function useWorkspace() {
   }
 
   async function chooseOutput() {
-    await perform('选择结果文件夹', async () => {
+    await perform({kind: 'folder', label: '选择结果文件夹'}, async () => {
       if (!native.current) return;
       const folder = nativeValue(await native.current.call('choose_workspace_output', {}));
       if (folder) {
@@ -171,7 +172,7 @@ export function useWorkspace() {
   }
 
   async function restoreAccess() {
-    await perform('核验目录访问权限', async () => {
+    await perform({kind: 'access', label: '核验目录访问权限'}, async () => {
       if (!native.current || !workspaceId) return;
       const result = nativeValue(await native.current.call('restore_workspace_access', {workspace_id: workspaceId}));
       if (result) {if (result.output_folder) setOutput(result.output_folder); refresh(); setDetailRevision(value => value + 1);}
@@ -179,7 +180,7 @@ export function useWorkspace() {
   }
 
   async function replaceInput() {
-    await perform('更换来源文件夹', async () => {
+    await perform({kind: 'folder', label: '更换来源文件夹'}, async () => {
       if (!native.current || !workspaceId) return;
       const folder = nativeValue(await native.current.call('choose_workspace_input', {}));
       if (folder) {accept(await api.setWorkspaceFolders(workspaceId, {input_folder_id: folder.folder_id})); refresh(); setDetailRevision(value => value + 1);}
@@ -188,7 +189,7 @@ export function useWorkspace() {
 
   async function select(selection: SelectionWrite) {
     if (!workspaceId) return;
-    await perform('更新选择', async () => {
+    await perform({kind: 'selection', label: '更新选择'}, async () => {
       const result = await api.selectWorkspace(workspaceId, {...selection, q: query, filter, issue});
       setHiddenSelection(result.hidden_count);
       setWorkspace(current => current ? {...current, selected: result.count, selection_id: result.selection_id, selection_query: result.selection_query} : current);
@@ -196,13 +197,13 @@ export function useWorkspace() {
     });
   }
 
-  async function mutate(label: string, operation: () => Promise<WorkspaceSummary>, updateDetail = false) {
-    await perform(label, async () => {accept(await operation()); refresh(); if (updateDetail) setDetailRevision(value => value + 1);});
+  async function mutate(context: Operation, operation: () => Promise<WorkspaceSummary>, updateDetail = false) {
+    await perform(context, async () => {accept(await operation()); refresh(); if (updateDetail) setDetailRevision(value => value + 1);});
   }
 
   async function nextIssue() {
     if (!workspaceId || filter !== 'error') return;
-    await perform('定位下一问题', async () => {
+    await perform({kind: 'issue', label: '定位下一问题'}, async () => {
       const result = await api.getNextWorkspaceIssue(workspaceId, {q: query, issue, ...(activeId ? {after_id: activeId} : {})});
       const current = viewRef.current;
       if (current.workspaceId !== workspaceId || current.query !== query || current.filter !== 'error' || current.issue !== issue) return;

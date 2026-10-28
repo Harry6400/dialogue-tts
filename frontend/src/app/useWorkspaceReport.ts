@@ -54,7 +54,7 @@ export function useWorkspaceReport(model: WorkspaceModel) {
   }
   async function createAndSave() {
     if (!workspace || !canCreate || manifest || creationUnknown) return;
-    await model.perform('导出批次 CSV 清单', async () => {
+    await model.perform({kind: 'report', label: '导出批次 CSV 清单'}, async () => {
       setState('creating'); setMessage('正在创建整个批次的 CSV 快照…'); setReceipt(null);
       try {
         const report = await model.api.createWorkspaceReport(workspace.id);
@@ -70,20 +70,20 @@ export function useWorkspaceReport(model: WorkspaceModel) {
   }
   async function retrySave() {
     if (!manifest || receipt) return;
-    await model.perform('重试保存 CSV 清单', async () => {
+    await model.perform({kind: 'report', label: '重试保存 CSV 清单'}, async () => {
       try {await save(manifest);} catch (issue) {setState('unknown'); setMessage(messageOf(issue) + ' 当前清单快照已保留。');}
     });
   }
   async function cancelCurrent() {
     if (!manifest) return;
-    await model.perform('取消本次临时 CSV 清单', async () => {
+    await model.perform({kind: 'report', label: '取消本次临时 CSV 清单'}, async () => {
       setState('cleaning');
       try {await discard(manifest); setState(receipt ? 'saved' : 'cancelled'); setMessage(receipt ? '已清理本次临时 CSV；已保存文件保留。' : '已取消本次临时 CSV 清单。');}
       catch (issue) {setState('error'); setMessage(messageOf(issue));}
     });
   }
   async function cancelPending() {
-    await model.perform('取消未保存的临时 CSV 清单', async () => {
+    await model.perform({kind: 'report', label: '取消未保存的临时 CSV 清单'}, async () => {
       setState('cleaning');
       try {
         const result = await model.api.cancelPendingReports();

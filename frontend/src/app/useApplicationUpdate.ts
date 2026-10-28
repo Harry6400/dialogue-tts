@@ -27,7 +27,7 @@ export function useApplicationUpdate(model: WorkspaceModel, busy: boolean, runni
     setFeedback({state: install ? 'preparing' : 'checking', message: install ? '正在准备更新…' : '正在检查正式版本…'});
     try {
       let started = false;
-      await model.perform(install ? '准备更新' : '检查更新', async () => {
+      await model.perform({kind: install ? 'update_install' : 'update_check', label: install ? '准备更新' : '检查更新'}, async () => {
         started = true;
         try {
           const outcome = await model.native.current!.call(install ? 'install_update' : 'check_for_update', {});

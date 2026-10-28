@@ -131,14 +131,16 @@ it('keeps pending audio outside issue categories and retries saving without sour
   render(<App/>);
   expect(await screen.findByTestId('pending-audio')).toHaveTextContent('2 通完整音频待保存');
   expect(screen.getByTestId('consent')).not.toBeChecked();
-  const retry = footerControl('重试保存'); expect(retry).toBeEnabled(); fireEvent.click(retry);
+  const retry = footerControl('重试保存'); await waitFor(() => expect(retry).toBeEnabled()); fireEvent.click(retry);
   await waitFor(() => expect(backend.calls.some(call => call.url.pathname.endsWith('/retry'))).toBe(true));
   expect(backend.calls.find(call => call.url.pathname.endsWith('/retry'))?.body).toEqual({kind: 'save'});
   expect(backend.calls.some(call => /\/(start|resume|audition)$/.test(call.url.pathname))).toBe(false);
 });
 
 it('uses eligible selected count for generation and preserves explicit consent for synthesis retry', async () => {
-  const backend = server(); render(<App/>); await findCall('000001.mp3');
+  // A completed frozen plan may contain failed synthesis plus a new ready
+  // selection; a never-started ready batch cannot retry a prior plan.
+  const backend = server({status: 'done', has_run_plan: true, save_pending: 0, save_error: 0}); render(<App/>); await findCall('000001.mp3');
   expect(screen.getByTestId('generate')).toHaveTextContent('生成 1 通');
   expect(screen.getByText('已选 2 通 · 可生成 1 通')).toBeVisible();
   expect(footerControl('重试合成')).toBeDisabled();

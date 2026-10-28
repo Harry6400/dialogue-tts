@@ -23,6 +23,19 @@ describe('HTTP contract', () => {
 });
 
 describe('native contract', () => {
+  it('writes application theme independently of batch sound preferences on Windows and Mac', async () => {
+    const theme = vi.fn().mockResolvedValue({ok: true});
+    const legacy = vi.fn();
+    const windows = createNativeBridge({pywebview: {api: {set_application_preferences: theme, set_preferences: legacy}}});
+    expect(await windows.call('set_application_preferences', {theme: 'dark'})).toMatchObject({kind: 'success'});
+    expect(theme).toHaveBeenCalledExactlyOnceWith({theme: 'dark'}); expect(legacy).not.toHaveBeenCalled(); windows.dispose();
+    let request: {request_id: string; method: string; args: unknown} | undefined;
+    const host: NativeHost = {webkit: {messageHandlers: {dialogueFolders: {postMessage: message => {request = message;}}}}};
+    const mac = createNativeBridge(host); const pending = mac.call('set_application_preferences', {theme: 'light'});
+    expect(request).toMatchObject({method: 'set_application_preferences', args: {theme: 'light'}});
+    host.dialogueNativeFolderResponse?.({request_id: request!.request_id, result: {ok: true}});
+    expect(await pending).toMatchObject({kind: 'success'}); mac.dispose();
+  });
   it('passes only the opaque report ID to the Windows save panel', async () => {
     const save = vi.fn().mockResolvedValue({cancelled: true}); const id = 'a'.repeat(32);
     const bridge = createNativeBridge({pywebview: {api: {save_workspace_report: save}}});

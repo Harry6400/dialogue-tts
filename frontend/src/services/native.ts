@@ -4,6 +4,7 @@ interface Methods {
   request_close: {args: Record<string, never>; value: {ok: boolean}};
   get_preferences: {args: Record<string, never>; value: Preferences};
   set_preferences: {args: PreferenceWrite; value: {ok: boolean; error?: string}};
+  set_application_preferences: {args: {theme: 'light' | 'dark'}; value: {ok: boolean; error?: string}};
   choose_input_directory: {args: Record<string, never>; value: Folder & {ok: true; files: {name: string; content: string}[]}};
   choose_output_directory: {args: Record<string, never>; value: Folder & {ok: true}};
   choose_workspace_input: {args: Record<string, never>; value: Folder & {ok: true}};
@@ -81,7 +82,7 @@ export function createNativeBridge(host: NativeHost = window as NativeHost) {
         const fn = host.pywebview?.api?.[method];
         if (!fn) return {kind: 'unsupported'};
         const values = args as Record<string, unknown>;
-        const positional = method === 'set_preferences' ? [args] : method === 'restore_workspace_access' ? [values.workspace_id] : method === 'save_workspace_report' ? [values.report_id] : method === 'check_completed' ? [values.folder_id, values.fingerprints, values.expected_names] : method === 'save_to_output' ? [values.resource_path, values.folder_id] : method === 'save_download' ? [values.resource_path] : 'folder_id' in values ? [values.folder_id] : [];
+        const positional = method === 'set_preferences' || method === 'set_application_preferences' ? [args] : method === 'restore_workspace_access' ? [values.workspace_id] : method === 'save_workspace_report' ? [values.report_id] : method === 'check_completed' ? [values.folder_id, values.fingerprints, values.expected_names] : method === 'save_to_output' ? [values.resource_path, values.folder_id] : method === 'save_download' ? [values.resource_path] : 'folder_id' in values ? [values.folder_id] : [];
         return normalize<Methods[M]['value']>(await fn(...positional));
       } catch {return {kind: 'unknown', message: '无法确认原生操作结果，请先核对状态。'};}
     },

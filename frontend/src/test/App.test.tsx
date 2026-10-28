@@ -204,6 +204,18 @@ it('continues an interrupted settings check without claiming online consent',asy
   await waitFor(()=>expect(backend.calls.find(call=>call.path.endsWith('/resume'))?.body).toEqual({}));
 });
 
+it('keeps a verification entry when current grants are valid but earlier outputs remain unverified', async () => {
+  server(summary({status: 'interrupted', phase: 'recovery', has_run_plan: true, counts: {unverified: 1}, can_edit: false}));
+  const restore = vi.fn().mockResolvedValue({cancelled: true});
+  (window as NativeHost).pywebview = {api: {restore_workspace_access: restore}};
+  render(<App/>);
+  const button = await screen.findByRole('button', {name: '核验已有结果'});
+  await waitFor(() => expect(button).toBeEnabled());
+  expect(screen.getByTestId('resume')).toBeDisabled();
+  fireEvent.click(button);
+  await waitFor(() => expect(restore).toHaveBeenCalledExactlyOnceWith('workspace-one'));
+});
+
 it('locates only the visible row supplied by the actual honorific matcher',async()=>{
   server(summary(),true);render(<App/>);
   await screen.findByRole('checkbox',{name:'选择 000123.mp3'});
@@ -344,10 +356,31 @@ it('opens whole-batch CSV export from batch actions and waits for the native sav
   expect(within(dialog).getByRole('button', {name: '关闭弹窗'})).toBeDisabled();
   fireEvent(dialog, new Event('cancel', {cancelable: true}));
   expect(dialog).toBeVisible();
+  act(() => (window as Window & {dialogueCheckForUpdates?: () => void}).dialogueCheckForUpdates?.());
+  expect(dialog).toBeVisible();
+  expect(screen.queryByRole('dialog', {name: '应用设置'})).not.toBeInTheDocument();
   await act(async () => finish({ok: true, save_id: 'd'.repeat(32), report_id: 'a'.repeat(32), name: '清单.csv', path: '/fictional/report.csv', size: 1024, sha256: 'c'.repeat(64)}));
   await waitFor(() => expect(within(dialog).getByRole('status')).toHaveTextContent('已保存并核验 清单.csv'));
   expect(backend.calls.find(call => call.path.endsWith('/report'))?.body).toEqual({});
   expect(backend.calls.find(call => call.path.endsWith('/discard'))?.body).toEqual({});
   expect(backend.calls.some(call => /\/(start|resume|retry|audition)$/.test(call.path))).toBe(false);
   expect(screen.getByTestId('consent')).not.toBeChecked();
+});
+
+it('changes only application theme and reverts visual state on a failed preference save', async () => {
+  const backend = server();
+  const theme = vi.fn().mockResolvedValueOnce({ok: true}).mockResolvedValueOnce({ok: false, error: '偏好暂不可写'});
+  const legacy = vi.fn();
+  (window as NativeHost).pywebview = {api: {set_application_preferences: theme, set_preferences: legacy}};
+  render(<App/>); await screen.findByTestId('workspace-ready');
+  fireEvent.click(screen.getByRole('button', {name: '应用设置'}));
+  const dialog = screen.getByRole('dialog', {name: '应用设置'});
+  fireEvent.click(within(dialog).getByRole('button', {name: '深色'}));
+  await waitFor(() => expect(theme).toHaveBeenCalledWith({theme: 'dark'}));
+  await waitFor(() => expect(within(dialog).getByRole('button', {name: '浅色'})).toBeEnabled());
+  fireEvent.click(within(dialog).getByRole('button', {name: '浅色'}));
+  await waitFor(() => expect(document.documentElement.dataset.theme).toBe('dark'));
+  expect(theme.mock.calls).toEqual([[{theme: 'dark'}], [{theme: 'light'}]]);
+  expect(legacy).not.toHaveBeenCalled();
+  expect(backend.calls.some(call => call.path.endsWith('/settings'))).toBe(false);
 });

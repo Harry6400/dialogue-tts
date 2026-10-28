@@ -5,6 +5,8 @@ import type {Modal} from './AppDialogs';
 import {isWorking, messageOf, type WorkspaceModel} from './useWorkspace';
 import {useApplicationUpdate} from './useApplicationUpdate';
 import {useWorkspaceReport} from './useWorkspaceReport';
+import {blocksUpdate} from './operation';
+import {workspaceActions} from './workspaceActions';
 type SafetyHost = Window & {dialogueCloseSafety?: () => object; dialogueUpdateSafety?: () => object; dialogueShowUnsaved?: () => void; dialogueUpdateLock?: (value: boolean) => void; dialogueCheckForUpdates?: () => void};
 const defaultSettings: SoundSettings = {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', USER: 'zh-CN-XiaoyiNeural'}, rate: 1, pause_ms: 250, auto_voice: true, manual_user_voice: false};
 export function useWorkbench(model: WorkspaceModel) {
@@ -29,8 +31,10 @@ export function useWorkbench(model: WorkspaceModel) {
   const running = isWorking(workspace);
   const updates = useApplicationUpdate(model, busy, running);
   const reports = useWorkspaceReport(model);
-  const updateSafetyBusy = !!model.pending && !['准备更新','检查更新'].includes(model.pending);
-  const restoredAccess = !!workspace && workspace.input_folder.valid !== false && model.output?.valid !== false;
+  const updateSafetyBusy = blocksUpdate(model.pending);
+  const actions = workspace ? workspaceActions({workspace, output: model.output, consent, busy, loading: model.loading, safety: model.safety}) : null;
+  const restoredAccess = actions?.restoredAccess ?? false;
+  const needsVerification = actions?.needsVerification ?? false;
 
   useEffect(() => {if (model.preferences?.theme) {setTheme(model.preferences.theme); document.documentElement.dataset.theme = model.preferences.theme;}}, [model.preferences?.theme]);
   useEffect(() => {const timer = setTimeout(() => {if (model.query !== search) model.setQuery(search);}, 250); return () => clearTimeout(timer);}, [search, model.query, model.setQuery]);
@@ -38,9 +42,12 @@ export function useWorkbench(model: WorkspaceModel) {
   useEffect(() => {
     const host = window as SafetyHost;
     const previous = host.dialogueCheckForUpdates;
-    host.dialogueCheckForUpdates = () => {setNarrowOpen(false); setModal('settings'); void updates.check();};
+    host.dialogueCheckForUpdates = () => {
+      if (busy || running) {model.setError('请先完成当前操作或暂停任务，再检查更新。'); return;}
+      setNarrowOpen(false); setModal('settings'); void updates.check();
+    };
     return () => {host.dialogueCheckForUpdates = previous;};
-  }, [updates.check]);
+  }, [updates.check, busy, running, model.setError]);
 
   useEffect(() => {
     const host = window as SafetyHost;
@@ -94,34 +101,34 @@ export function useWorkbench(model: WorkspaceModel) {
   }, [mode, modal, narrowOpen]);
 
   async function changeTheme() {
-    const next = theme === 'light' ? 'dark' : 'light'; setTheme(next); document.documentElement.dataset.theme = next;
-    if (model.native.current) {
-      const result = await model.native.current.call('set_preferences', {...(workspace?.settings || defaultSettings), theme: next});
-      if (result.kind === 'error' || result.kind === 'unknown') model.setError(result.message);
-    }
+    await model.perform({kind: 'preferences', label: '切换外观'}, async () => {
+      const next = theme === 'light' ? 'dark' : 'light'; setTheme(next); document.documentElement.dataset.theme = next;
+      if (model.native.current) {
+        const result = await model.native.current.call('set_application_preferences', {theme: next});
+        if (result.kind === 'error' || result.kind === 'unknown') {setTheme(theme); document.documentElement.dataset.theme = theme; model.setError(result.message);}
+      }
+    });
   }
   async function pauseAndExit() {
     if (!workspace || !running) return requestClose();
     exitRequested.current = true;
-    if (workspace.status === 'scanning') await model.mutate('停止扫描并保存进度', () => model.api.cancelWorkspaceScan(workspace.id));
-    else await model.mutate('保存进度并退出', () => model.api.pauseWorkspace(workspace.id));
+    if (workspace.status === 'scanning') await model.mutate({kind: 'cancel', label: '停止扫描并保存进度'}, () => model.api.cancelWorkspaceScan(workspace.id));
+    else await model.mutate({kind: 'pause', label: '保存进度并退出'}, () => model.api.pauseWorkspace(workspace.id));
   }
   async function startOrResume() {
-    if (!workspace) return;
-    if (workspace.phase === 'recovery_checking') return model.restoreAccess();
-    if ((!offlineResume && (!consent || !model.output)) || !restoredAccess) return;
-    if (['paused', 'interrupted'].includes(workspace.status)) await model.mutate('继续生成', () => model.api.resumeWorkspace(workspace.id, offlineResume));
-    else if (workspace.selection_id) await model.mutate('开始生成', () => model.api.startWorkspace(workspace.id, {selection_id: workspace.selection_id!, output_folder_id: model.output!.folder_id, consent: true, request_id: requestId()}));
-    setConsent(false);
+    if (!workspace || !actions?.enabled) return;
+    if (actions.kind === 'restore') return model.restoreAccess();
+    if (actions.kind === 'resume' || actions.kind === 'resume_offline') await model.mutate({kind: 'resume', label: actions.label}, () => model.api.resumeWorkspace(workspace.id, actions.offline));
+    else if (actions.kind === 'start') await model.mutate({kind: 'start', label: '开始生成'}, () => model.api.startWorkspace(workspace.id, {selection_id: workspace.selection_id!, output_folder_id: model.output!.folder_id, consent: true, request_id: requestId()}));
+    if (!actions.offline) setConsent(false);
   }
   function clearFilters() {setSearch(''); model.setQuery(''); model.setFilter('all');}
   function resetView() {setConsent(false); setMode('overview'); setSearch('');}
   async function importFolder() {await model.importFolder(); resetView();}
   function review() {setMode('review'); setScope('call');}
-  const resumable = !!workspace && ['paused', 'interrupted'].includes(workspace.status);
-  const offlineResume = resumable && ['recovery_scan','recovery_settings','recovery_checking'].includes(workspace?.phase || '');
-  async function startAudition() {await model.perform('创建试听', async () => {setAuditionJob(await model.api.audition(auditionSettings.current, requestId()));});}
-  return {workspace, config, mode, setMode, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, consent, setConsent, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates, reports};
+  const resumable = actions?.resumable ?? false;
+  async function startAudition() {await model.perform({kind: 'audition', label: '创建试听'}, async () => {setAuditionJob(await model.api.audition(auditionSettings.current, requestId()));});}
+  return {workspace, config, mode, setMode, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, consent, setConsent, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, needsVerification, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates, reports};
 }
 
 export type WorkbenchUi = ReturnType<typeof useWorkbench>;

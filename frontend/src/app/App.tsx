@@ -17,7 +17,7 @@ import {WorkspaceHeader,WorkspaceSearch} from './WorkspaceToolbar';
 export function App() {
   const model = useWorkspace();
   const ui=useWorkbench(model);
-  const {workspace,config,mode,scope,setScope,settingsOpen,setSettingsOpen,modal,setModal,consent,setConsent,theme,previewOpen,setPreviewOpen,auditionSettings,auditionJob,setAuditionJob,auditionRunning,busy,running,restoredAccess,settingsTrigger,narrowOpen,setNarrowOpen,updateLocked,importFolder,resetView,changeTheme,review,startOrResume,pauseAndExit,startAudition}=ui;
+  const {workspace,config,mode,scope,setScope,settingsOpen,setSettingsOpen,modal,setModal,consent,setConsent,theme,previewOpen,setPreviewOpen,auditionSettings,auditionJob,setAuditionJob,auditionRunning,busy,running,settingsTrigger,narrowOpen,setNarrowOpen,updateLocked,importFolder,resetView,changeTheme,review,startOrResume,pauseAndExit,startAudition}=ui;
   const settingsPanel = <SettingsPanel auditionBusy={auditionRunning} model={model} scope={scope} setScope={setScope} onClose={() => {setSettingsOpen(false); settingsTrigger.current?.focus();}} onHelp={setModal} onAudition={settings => {auditionSettings.current = settings; setAuditionJob(null); setModal('audition');}}/>;
 
   return <div data-testid="app-shell" className={`${styles.app} ${!settingsOpen ? styles.settingsCollapsed : ''}`} aria-busy={updateLocked}>
@@ -33,7 +33,7 @@ export function App() {
         <SelectionToolbar model={model} busy={busy}/>
         <div className={styles.overview} hidden={mode !== 'overview'}><WorkspaceTable model={model} active={mode === 'overview'} onReview={review} onClearFilters={ui.clearFilters}/>{previewOpen && <Reader model={model} active={mode === 'overview'} compact onReview={review} onSources={() => setModal('sources')} onMatchHelp={() => setModal('match')}/>}<button className={styles.previewToggle} onClick={() => setPreviewOpen(!previewOpen)} aria-expanded={previewOpen}>{previewOpen ? '收起预览' : '显示预览'}<Icon name="chevron"/></button></div>
         <div className={styles.reviewWorkspace} hidden={mode !== 'review'}><div className={styles.reviewList}><WorkspaceTable model={model} active={mode === 'review'} onReview={review} onClearFilters={ui.clearFilters} context="review"/></div><Reader model={model} active={mode === 'review'} onReview={review} onSources={() => setModal('sources')} onMatchHelp={() => setModal('match')}/></div>
-        <WorkspaceFooter model={model} consent={consent} setConsent={setConsent} busy={busy} running={running} restoredAccess={restoredAccess} onStart={startOrResume}/>
+        <WorkspaceFooter model={model} consent={consent} setConsent={setConsent} busy={busy} running={running} onStart={startOrResume}/>
 
       </>}
     </main>

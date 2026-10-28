@@ -16,11 +16,11 @@ function soundContext(props: Props) {
   const auditionSettings=settings&&{...settings,voices:{...settings.voices,...(scope==='call'&&effectiveCustomer?{USER:effectiveCustomer}:{})}};
   async function update(patch: Partial<SoundSettings>) {
     if (!workspace||!settings) return;
-    await model.mutate('保存声音设置',()=>model.api.setWorkspaceSettings(workspace.id,{settings:{...settings,...patch}}),true);
+    await model.mutate({kind: 'settings', label: '保存声音设置'},()=>model.api.setWorkspaceSettings(workspace.id,{settings:{...settings,...patch}}),true);
   }
   async function override(value:string,selected=false) {
     if (!workspace||(!selected&&!current)) return;
-    await model.mutate('保存客户声音',()=>model.api.setWorkspaceSettings(workspace.id,{...(selected?{selection_id:workspace.selection_id}:{item_id:current!.id}),customer_voice:value?value as VoiceId:null}),true);
+    await model.mutate({kind: 'settings', label: '保存客户声音'},()=>model.api.setWorkspaceSettings(workspace.id,{...(selected?{selection_id:workspace.selection_id}:{item_id:current!.id}),customer_voice:value?value as VoiceId:null}),true);
   }
   return {model,workspace,settings,current,effectiveCustomer,disabled,auditionDisabled,auditionSettings,update,override,props};
 }
@@ -49,7 +49,7 @@ function BatchSettings({ctx}:{ctx:Context}) {
 }
 function OutputSettings({ctx}:{ctx:Context}) {
   const {model,workspace,props}=ctx;
-  return <div className={styles.settingGroup}><span className={styles.fieldLabel}>批次输出目录</span><button data-testid="output-folder" className={styles.folderButton} disabled={!!model.pending||isWorking(workspace)} onClick={()=>void model.chooseOutput()}><Icon name="folder"/><span title={model.output?.path}>{shortPath(model.output?.path)}</span><span className={styles.folderAction}>更换</span></button><p className={styles.fieldHint}>整个批次均在每通生成后自动保存到此处。</p><div className={styles.metaAction}><span>文件名按 XML 编号</span><button className={styles.infoButton} aria-label="固定命名规则" onClick={()=>props.onHelp('names')}><Icon name="info"/></button></div>{model.output&&<button className={styles.textButton} onClick={()=>void model.perform('打开结果文件夹',async()=>{if(model.native.current)model.nativeValue(await model.native.current.call('reveal_output',{folder_id:model.output!.folder_id}));})}>打开文件夹 <Icon name="arrow"/></button>}</div>;
+  return <div className={styles.settingGroup}><span className={styles.fieldLabel}>批次输出目录</span><button data-testid="output-folder" className={styles.folderButton} disabled={!!model.pending||isWorking(workspace)} onClick={()=>void model.chooseOutput()}><Icon name="folder"/><span title={model.output?.path}>{shortPath(model.output?.path)}</span><span className={styles.folderAction}>更换</span></button><p className={styles.fieldHint}>整个批次均在每通生成后自动保存到此处。</p><div className={styles.metaAction}><span>文件名按 XML 编号</span><button className={styles.infoButton} aria-label="固定命名规则" onClick={()=>props.onHelp('names')}><Icon name="info"/></button></div>{model.output&&<button className={styles.textButton} onClick={()=>void model.perform({kind: 'reveal', label: '打开结果文件夹'},async()=>{if(model.native.current)model.nativeValue(await model.native.current.call('reveal_output',{folder_id:model.output!.folder_id}));})}>打开文件夹 <Icon name="arrow"/></button>}</div>;
 }
 function SelectionSettings({ctx}:{ctx:Context}) {
   const {workspace,override}=ctx;
