@@ -119,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(check_update())
         if path == "/api/config":
             from .updates import CURRENT_VERSION, MAC_BUILD_NUMBER
-            return self.json({"token": self.server.token, "voices": self.server.voice_catalog["voices"], "catalog_revision": self.server.voice_catalog["revision"], "catalog_source": self.server.voice_catalog["source"], "xml_example": XML_EXAMPLE, "can_shutdown": getattr(self.server, "can_shutdown", False), "app_version": CURRENT_VERSION, "mac_build_number": MAC_BUILD_NUMBER if sys.platform == 'darwin' else None})
+            return self.json({"connection_mode": self.server.jobs.connection_mode, "retry_attempts": self.server.jobs.retry_attempts, "token": self.server.token, "voices": self.server.voice_catalog["voices"], "catalog_revision": self.server.voice_catalog["revision"], "catalog_source": self.server.voice_catalog["source"], "xml_example": XML_EXAMPLE, "can_shutdown": getattr(self.server, "can_shutdown", False), "app_version": CURRENT_VERSION, "mac_build_number": MAC_BUILD_NUMBER if sys.platform == 'darwin' else None})
         if path == "/api/voices":
             return self.json(self.server.voice_catalog)
         parts = path.strip("/").split("/")
@@ -220,6 +220,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise InputError('请求必须为对象。')
                 from .workspace_http import post_workspace
                 return self.json(post_workspace(self, path, payload))
+            if path == '/api/network':
+                if not isinstance(payload, dict):
+                    raise InputError('语音连接参数无效。')
+                if set(payload) == {'connection_mode'}:
+                    return self.json(self.server.jobs.set_connection_mode(payload['connection_mode']))
+                if set(payload) == {'retry_attempts'}:
+                    return self.json(self.server.jobs.set_retry_attempts(payload['retry_attempts']))
+                raise InputError('语音连接参数无效。')
             if path == "/api/update/lock":
                 from .runtime_safety import combined_safety
                 if any(combined_safety(self.server.workspaces,self.server.reports,self.server.audio_captures,self.server.jobs).values()):

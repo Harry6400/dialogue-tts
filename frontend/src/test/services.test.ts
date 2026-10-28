@@ -4,6 +4,14 @@ import {createNativeBridge, type NativeHost} from '../services/native';
 afterEach(() => vi.useRealTimers());
 
 describe('HTTP contract', () => {
+  it('sends the configured connection attempt limit to the existing settings endpoint', async () => {
+    const transport = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({token: 'test-session', voices: []}))).mockResolvedValueOnce(new Response(JSON.stringify({ok: true, retry_attempts: 30})));
+    const client = new ApiClient(transport);
+    await client.getConfig();
+    await client.setRetryAttempts(30);
+    expect(transport.mock.calls[1][0]).toBe('/api/network');
+    expect(transport.mock.calls[1][1]).toMatchObject({method: 'POST', body: JSON.stringify({retry_attempts: 30})});
+  });
   it.each([null, {busy: 0, unsaved: false, saving: false, pending: false}, {busy: false, unsaved: false, saving: false}, {busy: false, unsaved: false, saving: false, pending: false, legacy_unsaved: 'unknown'}, {busy: false, unsaved: false, saving: false, pending: false, unknown: true}])('rejects malformed or unknown safety state %o', async state => {
     const client = new ApiClient(vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(state))));
     await expect(client.getWorkspaceSafety()).rejects.toMatchObject({message: '无法确认任务与保存状态，请重新核验。'});

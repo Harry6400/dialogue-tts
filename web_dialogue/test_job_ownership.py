@@ -47,6 +47,27 @@ class JobOwnershipTests(unittest.TestCase):
         self.state=Path(self.temp.name)/'state'
         self.jobs=Jobs(state_dir=self.state);self.addCleanup(lambda:self.jobs.close())
 
+    def test_timing_is_copied_to_recovery_before_auxiliary_cleanup(self):
+        from .mp3_frames import parse_frames
+        duration=len(parse_frames(AUDIO))*24
+        ident=completed(self.jobs,context={'workspace_id':'b'*32,'item_id':'c'*32})
+        folder=self.jobs.items[ident]['folder']
+        (folder/'timeline.json').write_text(json.dumps({'audio_sha256':DIGEST,'duration_ms':duration,'segments':[{'id':3,'start_ms':0,'end_ms':duration,'text':'must not persist'}]}))
+        first=self.jobs.result_metadata(ident)
+        self.assertEqual(first['timing']['segments'],[{'id':3,'start_ms':0,'end_ms':duration}])
+        self.assertFalse((folder/'timeline.json').exists())
+        self.assertNotIn('must not persist',(folder/'recovery.json').read_text())
+        self.jobs.close();self.jobs=Jobs(state_dir=self.state)
+        self.assertEqual(self.jobs.result_metadata(ident)['timing'],first['timing'])
+
+    def test_bad_timing_does_not_destroy_verified_audio(self):
+        ident=completed(self.jobs,context={'workspace_id':'b'*32,'item_id':'c'*32})
+        folder=self.jobs.items[ident]['folder']
+        (folder/'timeline.json').write_text('{broken')
+        with self.jobs.open_result(ident) as audio:self.assertEqual(audio.read(),AUDIO)
+        self.assertIsNone(self.jobs.result_metadata(ident)['timing'])
+        self.assertTrue((folder/'dialogue.mp3').is_file())
+
     def test_result_lease_blocks_release_and_close(self):
         ident=completed(self.jobs)
         with self.jobs.open_result(ident) as result:

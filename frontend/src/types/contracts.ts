@@ -2,14 +2,15 @@ export type Role = 'AGENT' | 'USER';
 export type VoiceId = 'zh-CN-XiaoxiaoNeural' | 'zh-CN-XiaoyiNeural' | 'zh-CN-YunxiNeural' | 'zh-CN-YunjianNeural' | 'zh-CN-YunxiaNeural' | 'zh-CN-YunyangNeural';
 export interface Voice {id: VoiceId; label: string; locale: 'zh-CN'; gender: 'Female' | 'Male'}
 export interface XmlFile {name: string; content: string}
-export interface Config {token: string; voices: Voice[]; catalog_revision: string; catalog_source: string; xml_example: XmlFile[]; can_shutdown: boolean; app_version?: string; mac_build_number?: string | null}
+export type ConnectionMode = 'direct' | 'system_proxy';
+export interface Config {connection_mode?: ConnectionMode; retry_attempts?: number; token: string; voices: Voice[]; catalog_revision: string; catalog_source: string; xml_example: XmlFile[]; can_shutdown: boolean; app_version?: string; mac_build_number?: string | null}
 export interface Line {id: number; speaker: Role; text: string; voice: VoiceId; pause_after_ms: number; speech_rate: number}
 export interface PreviewRow {id: number; speaker: Role; text: string; start_ms?: number; end_ms?: number; muted?: boolean; overlap?: boolean}
 export interface Script {lesson_id: string; title: string; language: string; lines: Line[]; settings: {speech_rate: number; initial_silence_ms: number; default_pause_ms: number}}
 export interface SoundSettings {voices: Partial<Record<Role, VoiceId>>; rate: number; pause_ms: number; auto_voice: boolean; manual_user_voice: boolean; catalog_revision?: string}
 export interface PairPayload extends SoundSettings {format: 'xml_pair'; xml_files: XmlFile[]; xml_time_unit?: 'ms'}
 export interface BatchPayload extends SoundSettings {files: XmlFile[]; pairs?: never[]; excluded?: string[]; voice_overrides?: Record<string, VoiceId>; xml_time_unit?: 'ms'}
-export interface Preview {filename: string; script: Script; rows: PreviewRow[]; speakers: Role[]; warnings: string[]; fingerprint: string; muted_count: number; sources: {name: string; role: Role; segments: number}[]; voice_choice: {user: VoiceId; reason: string; address: 'female' | 'male' | 'undetermined'; evidence_row_ids?: number[]; evidence_row_id?: number}}
+export interface Preview {filename: string; script: Script; rows: PreviewRow[]; speakers: Role[]; warnings: string[]; info_notes?: string[]; fingerprint: string; muted_count: number; sources: {name: string; role: Role; segments: number}[]; voice_choice: {user: VoiceId; reason: string; address: 'female' | 'male' | 'undetermined'; evidence_row_ids?: number[]; evidence_row_id?: number}}
 export interface BatchGroup {id: string; name: string; file_indices: number[]; status: 'ready' | 'error'; filename?: string; error?: string; error_code?: string; fingerprint?: string; preview?: Preview}
 export interface BatchPreview {groups: BatchGroup[]; counts: {ready: number; error: number}}
 export type JobStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled';
@@ -33,7 +34,9 @@ export type WorkspaceIssue = '' | IssueCategory;
 export type WorkspaceIssues = Record<IssueCategory | 'total', number>;
 export interface SelectionQuery {q: string; filter: WorkspaceFilter; issue: WorkspaceIssue}
 export interface WorkspaceItem {id: string; filename?: string; source_name?: string; status: ItemStatus; error?: string; error_code?: string; customer_voice?: VoiceId; voice_source?: string; selected: boolean; line_count?: number; has_audio?: boolean}
-export interface WorkspaceSummary {id: string; status: WorkspaceStatus; phase: string; revision: number; discovered: number; scanned: number; total: number; ready: number; error: number; issues: WorkspaceIssues; saved: number; selected: number; ready_selected: number; selection_query: SelectionQuery; processed: number; input_folder: Folder; output_folder?: Folder | null; settings: SoundSettings; active_item?: WorkspaceItem | null; message?: string; selection_id?: string; selection_hidden_count?: number; can_edit?: boolean; has_run_plan?: boolean; save_error?: number; save_pending: number; synthesis_error?: number; has_unsaved_audio?: boolean; counts?: Partial<Record<ItemStatus, number>>}
+export interface WorkspaceActiveItem {id:string;filename?:string;completed:number;total:number;phase:string;segment?:number;attempt?:number;attempt_limit?:number;connection_mode?:ConnectionMode;elapsed_ms?:number;phase_elapsed_ms?:number;received_bytes?:number}
+export type PlaybackTimeline = {available:false;reason:'missing'|'mismatch'|'unavailable'} | {available:true;fingerprint:string;audio_sha256:string;duration_ms:number;segments:{id:number;start_ms:number;end_ms:number}[]};
+export interface WorkspaceSummary {id: string; status: WorkspaceStatus; phase: string; revision: number; discovered: number; scanned: number; total: number; ready: number; error: number; issues: WorkspaceIssues; saved: number; selected: number; ready_selected: number; selection_query: SelectionQuery; processed: number; input_folder: Folder; output_folder?: Folder | null; settings: SoundSettings; active_item?: WorkspaceActiveItem | null; message?: string; selection_id?: string; selection_hidden_count?: number; can_edit?: boolean; has_run_plan?: boolean; save_error?: number; save_pending: number; synthesis_error?: number; has_unsaved_audio?: boolean; counts?: Partial<Record<ItemStatus, number>>}
 export interface WorkspacePage extends WorkspaceSummary {items: WorkspaceItem[]; matched_total: number; page: number; page_size: number; issue: WorkspaceIssue}
 export interface WorkspaceSnapshot extends WorkspaceSummary {items: WorkspaceItem[]; reset: boolean}
 export interface WorkspaceSafety {busy: boolean; unsaved: boolean; saving: boolean; pending: boolean; legacy_unsaved?: boolean}

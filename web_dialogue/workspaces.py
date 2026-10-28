@@ -21,6 +21,7 @@ from contextlib import contextmanager, nullcontext
 from .batch_import import _metadata
 from .normalize import InputError, VOICES
 from .mp3_frames import validated_file_digest
+from .speech_metadata import compact_timing, safe_diagnostics
 from .output_names import pair_filename, valid_output_name
 from .workspace_issues import ERROR_STATUSES, ERROR_WHERE, issue_counts, issue_where, normalize_issue
 
@@ -36,6 +37,10 @@ FILTERS = {'all': '1', 'ready': "status='ready'", 'pending': "status='ready'",
            'error': ERROR_WHERE,
            'issues': ERROR_WHERE,
            'saved': "status='saved'", 'selected': 'selected=1'}
+
+
+class SynthesisFailure(InputError):
+    """A worker's safe, user-facing failure, distinct from filesystem errors."""
 
 
 class Workspaces:
@@ -85,6 +90,11 @@ class Workspaces:
             CREATE INDEX IF NOT EXISTS item_revision ON items(wid,revision);
             CREATE INDEX IF NOT EXISTS item_selection ON items(wid,selected);
             CREATE INDEX IF NOT EXISTS item_queue ON items(wid,planned,status,filename,id);
+            CREATE TABLE IF NOT EXISTS playback_timelines(
+              item_id TEXT PRIMARY KEY, wid TEXT, fingerprint TEXT, audio_hash TEXT, timing TEXT);
+            CREATE INDEX IF NOT EXISTS playback_workspace ON playback_timelines(wid);
+            CREATE TABLE IF NOT EXISTS connection_diagnostics(
+              job_id TEXT PRIMARY KEY, wid TEXT, item_id TEXT, created REAL, data TEXT);
             CREATE TABLE IF NOT EXISTS requests(wid TEXT,request_id TEXT,digest TEXT,
               PRIMARY KEY(wid,request_id));
             ''')
@@ -220,6 +230,8 @@ class Workspaces:
                     if row['status']=='saved':
                         receipt=self.access.verify_output(row['saved_folder_id'] or ws['output_id'],row['filename'],row['fingerprint'])
                         if receipt['state']=='saved' and receipt['size']==result['size'] and receipt['sha256']==result['sha256']:
+                            self._store_result_metadata(db,ident,item_id,result)
+                            db.commit()
                             self.jobs.release(result['id']);continue
                 self._adopt_worker_result(ident,item_id,result)
                 continue
@@ -235,6 +247,38 @@ class Workspaces:
                             self._update_item(db,ident,item_id,status='save_error',pending_job=result['id'],error='完整合成源已保留；缓存写入未完成，请恢复空间或权限后重试保存。',error_code='save_failed')
                 except (ValueError,OSError,sqlite3.Error):facts['unknown']+=1
         self._source_facts=facts
+
+    def _store_result_metadata(self, db, ident, item_id, result):
+        timing = compact_timing(result.get('timing'), result.get('sha256'))
+        if timing:
+            db.execute('INSERT OR REPLACE INTO playback_timelines VALUES(?,?,?,?,?)',
+                       (item_id,ident,result['fingerprint'],result['sha256'],json.dumps(timing)))
+        diagnostics = safe_diagnostics(result.get('diagnostics'))
+        if diagnostics:
+            db.execute('INSERT OR REPLACE INTO connection_diagnostics VALUES(?,?,?,?,?)',
+                       (result['id'],ident,item_id,time.time(),json.dumps(diagnostics)))
+            db.execute('DELETE FROM connection_diagnostics WHERE job_id NOT IN (SELECT job_id FROM connection_diagnostics ORDER BY created DESC,job_id DESC LIMIT 20)')
+
+    def timeline(self, ident, item_id):
+        with self.db() as db:
+            row = db.execute('SELECT * FROM items WHERE wid=? AND id=?',(ident,item_id)).fetchone()
+            if row is None: raise KeyError('通话不存在。')
+            stored = db.execute('SELECT * FROM playback_timelines WHERE wid=? AND item_id=?',(ident,item_id)).fetchone()
+            if stored is None: return {'available':False,'reason':'missing'}
+            preview = self._preview(db,ident,item_id)
+            if preview['fingerprint'] != stored['fingerprint'] or row['fingerprint'] != stored['fingerprint']:
+                return {'available':False,'reason':'mismatch'}
+        try:
+            with self.audio_lease(ident,item_id)[0] as audio:
+                digest=hashlib.sha256()
+                for block in iter(lambda:audio.read(65536),b''):digest.update(block)
+            if digest.hexdigest()!=stored['audio_hash']:return {'available':False,'reason':'mismatch'}
+            timing=compact_timing(json.loads(stored['timing']),stored['audio_hash'])
+            ids=[r['id'] for r in preview['rows'] if not r.get('muted')]
+            if not timing or [s['id'] for s in timing['segments']]!=ids:
+                return {'available':False,'reason':'mismatch'}
+            return {'available':True,'fingerprint':stored['fingerprint'],**timing}
+        except (ValueError,OSError,KeyError):return {'available':False,'reason':'unavailable'}
 
     def _adopt_worker_result(self,ident,item_id,result):
         cache=self._audio_path(ident,item_id)
@@ -256,6 +300,7 @@ class Workspaces:
                 finally:staging.unlink(missing_ok=True)
             if self._cache_digest(cache)!=(result['size'],result['sha256']):raise ValueError('published cache differs')
             with self.db() as db:
+                self._store_result_metadata(db,ident,item_id,result)
                 self._update_item(db,ident,item_id,status='save_pending',pending_job=None,audio_hash=result['sha256'],audio_size=result['size'],error=None,error_code=None)
         self.jobs.release(result['id'])
 
@@ -642,6 +687,14 @@ class Workspaces:
     def _update_item(self,db,ident,item_id,**fields):
         phase=fields.pop('ws_phase',None)
         fields['revision']=self._bump(db,ident,**({'phase':phase} if phase else {}))
+        if fields.get('status')=='saving':
+            active = self._ws(db,ident)['active_item']
+            value = json.loads(active) if active else {}
+            if value.get('id')!=item_id:
+                current = db.execute('SELECT filename,line_count FROM items WHERE wid=? AND id=?',(ident,item_id)).fetchone()
+                value={'id':item_id,'filename':current['filename'],'completed':current['line_count'],'total':current['line_count']}
+            value.update(id=item_id,phase='saving',phase_elapsed_ms=0)
+            db.execute('UPDATE workspaces SET active_item=? WHERE id=?',(json.dumps(value),ident))
         db.execute('UPDATE items SET '+','.join(k+'=?' for k in fields)+' WHERE wid=? AND id=?',(*fields.values(),ident,item_id))
         db.commit()
 
@@ -678,17 +731,28 @@ class Workspaces:
         self.active_job=job['id']
         with self.db() as db:
             self._update_item(db,ident,item_id,pending_job=job['id'])
+        previous_progress = None
         while not self.stop.wait(.2):
             snapshot=self.jobs.snapshot(job['id'])
-            with self.db() as db:
-                db.execute('UPDATE workspaces SET active_item=? WHERE id=?',
-                           (json.dumps({'id':item_id,'filename':preview['filename'],'completed':snapshot['completed'],'total':snapshot['total']}),ident))
+            progress={'id':item_id,'filename':preview['filename'],'completed':snapshot['completed'],'total':snapshot['total'],
+                      'phase':snapshot.get('phase','connecting'),'segment':snapshot.get('segment',1),
+                      'attempt':snapshot.get('attempt',1),'attempt_limit':snapshot.get('attempt_limit',self.jobs.retry_attempts),
+                      'connection_mode':snapshot.get('connection_mode',self.jobs.connection_mode),
+                      'elapsed_ms':snapshot.get('elapsed_ms',0),'phase_elapsed_ms':snapshot.get('phase_elapsed_ms',0),
+                      'received_bytes':snapshot.get('received_bytes',0)}
+            # Ephemeral progress is independent of item/list revisions.
+            if progress!=previous_progress:
+                with self.db() as db:
+                    db.execute('UPDATE workspaces SET active_item=? WHERE id=?',(json.dumps(progress),ident))
+                previous_progress=progress
             if snapshot['status']=='done':
                 if not self.jobs.wait_finished(job['id'],3):raise InputError('合成进程尚未完成退出。')
                 with self.jobs.open_result(job['id']) as result:yield result,result.size,result.sha256
                 return
             if snapshot['status'] in {'error','cancelled'}:
-                raise InputError(snapshot.get('error') or '合成未完成。')
+                with self.db() as db:
+                    self._store_result_metadata(db,ident,item_id,{'id':job['id'],'diagnostics':snapshot.get('diagnostics')})
+                raise SynthesisFailure(snapshot.get('error') or '合成未完成。')
         self.jobs.cancel(job['id'])
         raise InputError('任务已中断。')
 
@@ -784,10 +848,12 @@ class Workspaces:
                                     os.replace(staging,cache)
                                     self._sync_cache()
                                     self._after_cache_publish(ident,item_id)
+                                    if self.active_job is not None:
+                                        self._store_result_metadata(db,ident,item_id,self.jobs.result_metadata(self.active_job))
                                     self._update_item(db,ident,item_id,status='saving',pending_job=None,error=None,error_code=None,audio_hash=digest.hexdigest(),audio_size=size,ws_phase='saving')
                             self._release_job(transferred=True)
                             row=db.execute('SELECT * FROM items WHERE id=?',(item_id,)).fetchone()
-                        except (ValueError,OSError,UnicodeError,KeyError):
+                        except (ValueError,OSError,UnicodeError,KeyError) as exc:
                             self._release_job()
                             try:cache.with_suffix('.tmp').unlink(missing_ok=True)
                             except OSError:pass
@@ -796,7 +862,8 @@ class Workspaces:
                                 self._update_item(db,ident,item_id,status='save_error',pending_job=self.active_job,error='完整合成源已保留；缓存写入未完成，可重试保存。',error_code='save_failed')
                                 self._bump(db,ident,status='paused',phase='save_error',message='完整合成源已保留，请恢复空间或权限后重试保存。')
                                 break
-                            self._update_item(db,ident,item_id,status='synthesis_error',pending_job=None,error='合成失败或输入已变化，可单独重试。',error_code='synthesis_failed')
+                            message=str(exc) if isinstance(exc,SynthesisFailure) else '合成失败或输入已变化，可单独重试。'
+                            self._update_item(db,ident,item_id,status='synthesis_error',pending_job=None,error=message,error_code='synthesis_failed')
                             failures+=1
                             if failures>=3:
                                 self._bump(db,ident,status='paused',phase='service_error',message='连续三通未完成，已暂停；请检查网络和输入。')
@@ -873,6 +940,7 @@ class Workspaces:
                     raise InputError('请先保存尚未保存的完整音频。')
                 if payload.get('discard_unsaved') is True:
                     self.jobs.discard_workspace_results(ident)
+                db.execute('DELETE FROM playback_timelines WHERE wid=?',(ident,))
                 db.execute('DELETE FROM items WHERE wid=?',(ident,));db.execute('DELETE FROM files WHERE wid=?',(ident,));db.execute('DELETE FROM requests WHERE wid=?',(ident,))
                 self._bump(db,ident,status='done',phase='finished',active_item=None,run_settings=None,verification_origin=None,selection_id=uuid.uuid4().hex)
                 with self.cache_lock:

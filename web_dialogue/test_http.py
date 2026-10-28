@@ -49,7 +49,22 @@ class HTTPTests(unittest.TestCase):
         self.assertIn(b'<!doctype html', body.lower())
         status, body, h = self.request('/api/config')
         self.assertEqual(json.loads(body)['token'], self.s.token)
+        self.assertEqual(json.loads(body)['retry_attempts'], 5)
         self.assertEqual(h['X-Frame-Options'], 'DENY')
+
+    def test_retry_attempts_config_endpoint_validates_and_returns_setting(self):
+        previous=self.s.jobs.retry_attempts
+        try:
+            self.assertEqual(self.request('/api/network',{'retry_attempts':30})[0],200)
+            self.assertEqual(json.loads(self.request('/api/config')[1])['retry_attempts'],30)
+            for value in (0,31,1.5,True,'5'):
+                with self.subTest(value=value):
+                    status,body,_=self.request('/api/network',{'retry_attempts':value})
+                    self.assertEqual(status,400)
+            self.assertEqual(self.request('/api/network',{'retry_attempts':1,'connection_mode':'direct'})[0],400)
+            self.assertEqual(self.request('/api/network',{'retry_attempts':5})[0],200)
+        finally:
+            self.s.jobs.set_retry_attempts(previous)
 
     def test_config_reports_shipped_version_offline_and_mac_build_only_on_mac(self):
         from .updates import CURRENT_VERSION, MAC_BUILD_NUMBER
@@ -115,7 +130,7 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(start.call_args.kwargs['fingerprint'],fingerprint)
         with tempfile.TemporaryDirectory() as directory:
             folder=Path(directory);(folder/'dialogue.mp3').write_bytes((Path(__file__).parent/'silence.mp3').read_bytes())
-            with patch.object(self.s.jobs, 'snapshot', return_value={'status':'done','fingerprint':fingerprint}), patch.dict(self.s.jobs.items, {'synthetic':{'folder':folder,'filename':'000123.mp3','fingerprint':fingerprint,'leases':0}}):
+            with patch.object(self.s.jobs, 'snapshot', return_value={'status':'done','fingerprint':fingerprint}), patch.dict(self.s.jobs.items, {'synthetic':{'folder':folder,'filename':'000123.mp3','fingerprint':fingerprint,'leases':0,'total':1}}):
                 status,_,headers=self.request('/api/jobs/synthetic/audio')
                 self.assertEqual(status,200);self.assertEqual(headers['X-Dialogue-Fingerprint'],fingerprint)
                 self.assertEqual(headers['Content-Disposition'],'attachment; filename="000123.mp3"')

@@ -14,7 +14,7 @@ from native_workspace import NativeWorkspaceAccess
 from .app import Jobs, make_server, close_resources
 from .normalize import InputError
 from .test_batch_import import xml
-from .workspaces import Workspaces
+from .workspaces import Workspaces, SynthesisFailure
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -55,11 +55,63 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(result['status'],'ready',result)
         return ident
 
+    def test_worker_network_failure_reaches_workspace_item(self):
+        self.pair('001');ident=self.import_ready()
+        message='无法连接系统代理。请确认代理应用已运行、端口可用后重试。'
+        with patch.object(self.work, '_synthesize', side_effect=SynthesisFailure(message)):
+            self.start(ident);self.wait(ident)
+        with self.work.db() as db:
+            item=db.execute('SELECT status,error,error_code FROM items WHERE wid=?',(ident,)).fetchone()
+        self.assertEqual(tuple(item),('synthesis_error',message,'synthesis_failed'))
+
     def start(self,ident):
         selection=self.work.select(ident,{'mode':'all'})
         payload={'selection_id':selection['selection_id'],'output_folder_id':self.target['folder_id'],
                  'consent':True,'request_id':'fictional-request-'+ident}
         return self.work.start(ident,payload),payload
+
+    def test_new_timing_survives_save_restart_and_settings_changes(self):
+        from .mp3_frames import join_segments
+        import hashlib
+        self.pair('001');ident=self.import_ready()
+        audio=(Path(__file__).parent/'silence.mp3').read_bytes()
+        source=self.root/'complete.mp3'
+        def synthesize(wid,item_id,preview):
+            from contextlib import contextmanager
+            @contextmanager
+            def completed():
+                data,spans,duration=join_segments([audio]*len(preview['script']['lines']),[250]*len(preview['script']['lines']),audio)
+                source.write_bytes(data)
+                digest=hashlib.sha256(data).hexdigest()
+                timing={'audio_sha256':digest,'duration_ms':duration,'segments':[{'id':line['id'],'start_ms':span[0],'end_ms':span[1]} for line,span in zip(preview['script']['lines'],spans)]}
+                with self.work.db() as db:self.work._store_result_metadata(db,wid,item_id,{'id':'fixture','sha256':digest,'fingerprint':preview['fingerprint'],'timing':timing})
+                with source.open('rb') as handle:yield handle,len(data),digest
+            return completed()
+        with patch.object(self.work,'_synthesize',side_effect=synthesize):self.start(ident);self.wait(ident)
+        item=self.work.page(ident)['items'][0]
+        timing=self.work.timeline(ident,item['id'])
+        self.assertTrue(timing['available']);self.assertEqual(len(timing['segments']),4)
+        self.assertNotIn('text',json.dumps(timing));self.assertEqual([p.suffix for p in self.output.iterdir()],['.mp3'])
+        self.work.close();self.work=Workspaces(self.state,self.jobs,self.access)
+        self.work.restore(ident);self.wait(ident,True)
+        self.assertTrue(self.work.timeline(ident,item['id'])['available'])
+        (self.output/'001.mp3').write_bytes(b'changed')
+        self.assertFalse(self.work.timeline(ident,item['id'])['available'])
+
+    def test_legacy_audio_has_no_fake_timeline(self):
+        self.pair('001');ident=self.import_ready();self.start(ident);self.wait(ident)
+        item=self.work.page(ident)['items'][0]
+        self.assertEqual(self.work.timeline(ident,item['id']),{'available':False,'reason':'missing'})
+
+    def test_diagnostic_history_is_bounded_and_text_free(self):
+        self.pair('001');ident=self.import_ready();item=self.work.page(ident)['items'][0]
+        with self.work.db() as db:
+            for index in range(25):
+                self.work._store_result_metadata(db,ident,item['id'],{'id':str(index),'diagnostics':{'connection_mode':'direct','events':[{'event':'error','error_type':'ConnectionResetError','text':'private','http_status':403}]}})
+            rows=list(db.execute('SELECT data FROM connection_diagnostics'))
+        self.assertEqual(len(rows),20)
+        self.assertNotIn('private',str(rows))
+        self.assertTrue(all(json.loads(row[0])['events'][0]['http_status']==403 for row in rows))
 
     def test_global_pairing_paging_and_private_metadata(self):
         for i in range(120):self.pair(f'{i:06d}')

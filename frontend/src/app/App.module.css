@@ -60,14 +60,14 @@
 .callTable th:nth-child(4){width:112px}
 .callTable th:nth-child(5){width:88px}
 .callTable th:last-child{width:42px}
-.callTable td{height:55px;border-bottom:1px solid var(--line);font-size:12px;vertical-align:middle}
+.callTable td{height:64px;border-bottom:1px solid var(--line);font-size:12px;vertical-align:middle}
 .callTable tr:hover td{background:var(--surface)}
 .callTable .activeRow td{background:var(--accent-soft)}
 .activeRow td:first-child{box-shadow:inset 2px 0 var(--accent)}
 .checkCell input{vertical-align:middle}
 .fileButton{display:block;width:100%;max-width:100%;padding:3px 0;border:0;border-radius:3px;background:transparent;text-align:left;font-size:13px;line-height:1.5;font-weight:520;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 .fileButton:hover{background:transparent!important;color:var(--accent-text)}
-.rowError{display:block;margin-top:3px;color:var(--warning);font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.rowError{display:block;min-height:16.5px;margin-top:3px;color:var(--warning);font-size:11px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cellSub{display:block;margin-top:3px;color:var(--muted);font-size:11px;line-height:1.4;overflow-wrap:anywhere}
 .segmentColumn{white-space:nowrap;color:var(--muted);font-size:11px!important}
 .voiceColumn{overflow-wrap:anywhere}
@@ -91,11 +91,11 @@
 .readerMeta{display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap;color:var(--muted);font-size:11px}
 .readerActions{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .readerBody{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:0 26px 22px}
-.transcript{display:grid;grid-template-columns:32px minmax(0,1fr);gap:12px;padding:20px 0;border-bottom:1px solid var(--line)}
-.transcript p{font-size:13px;line-height:1.9;max-width:70ch;overflow-wrap:anywhere}
+.transcript{display:grid;grid-template-columns:32px minmax(0,1fr);gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}
+.transcript p{font-size:13px;line-height:1.55;max-width:none;overflow-wrap:anywhere}
 .role{display:inline-flex;align-items:center;justify-content:center;min-width:31px;height:20px;margin-top:3px;border-radius:4px;background:var(--accent-soft);color:var(--accent-text);font-size:11px;white-space:nowrap;flex-shrink:0}
 .userRole{background:var(--surface);color:var(--muted)}
-.sourceTime{display:block;margin-bottom:7px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.sourceTime{display:block;line-height:14px;margin-bottom:2px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 .reviewWorkspace{display:grid;grid-template-columns:210px minmax(0,1fr);flex:1;min-height:0;min-width:0}
 .reviewList{display:flex;flex-direction:column;min-height:0;min-width:0;border-right:1px solid var(--line)}
 .reviewList .tableScroll{padding:0 8px}
@@ -271,7 +271,7 @@
 @keyframes drawerReveal{from{opacity:.5;transform:translateX(12px)}to{opacity:1;transform:translateX(0)}}
 @media(max-width:1250px){.app{grid-template-columns:168px minmax(0,1fr) 280px}.settingsCollapsed{grid-template-columns:168px minmax(0,1fr)}.main{padding:0 18px 16px}.sidebar{padding-left:10px;padding-right:10px}.toolbar>.iconButton span{display:none}.workspaceTools{padding:0 14px;gap:12px}.filters{gap:12px}.viewSwitch button{padding-left:8px;padding-right:8px}.selectionTools{padding:10px 14px;gap:9px}.searchField{flex-basis:185px}.callTable th:nth-child(3){width:40px}.callTable th:nth-child(4){width:90px}.callTable th:nth-child(5){width:78px}.callTable th:last-child{width:38px}.callTable th,.callTable td{padding-left:5px;padding-right:5px}.settingsHead{padding:0 20px}.settingsBody{padding:0 20px 22px}.scopeTabs{margin-left:20px;margin-right:20px}.reviewWorkspace{grid-template-columns:185px minmax(0,1fr)}.readerHead{padding-left:20px;padding-right:20px}.readerBody{padding-left:20px;padding-right:20px}}
 @media(max-width:1100px){.app,.settingsCollapsed{grid-template-columns:168px minmax(0,1fr)}.desktopSettings{display:none}.mainHeader{min-height:72px}.settingsHead{min-height:72px}.toolbar>.iconButton span{display:inline}}
-@media(max-width:800px){.app,.settingsCollapsed{grid-template-columns:142px minmax(0,1fr)}.main{padding:0 14px 14px}.mainHeader{min-height:64px;gap:10px}.heading h1{font-size:17px}.headingCopy{gap:8px}.headingCopy>span{font-size:11px}.toolbar{gap:2px}.toolbar>.iconButton{padding:5px 7px}.toolbar>.iconButton span{display:none}.sidebar{padding:22px 9px 16px}.brand{padding:0 5px;gap:7px;font-size:20px}.brandImage{width:29px;height:29px}.newBatch{min-height:35px}.navButton{padding:8px 7px;font-size:11px;gap:7px}.version{padding-left:7px}.workspaceTools{min-height:46px;gap:10px;padding:0 12px}.filters{gap:11px}.filters button{font-size:11px;gap:4px}.filters button>span:not(:empty){font-size:11px;padding:0 3px}.viewSwitch{padding:2px}.viewSwitch button{font-size:11px;min-height:26px;padding:4px 6px}.selectionTools{min-height:46px;padding:6px 12px;gap:7px}.searchField{flex-basis:160px;min-width:110px;height:32px;padding:0 8px}.searchField input{font-size:11px}.searchField kbd{display:none}.selectionActions{gap:1px}.selectionButton{height:28px;width:26px;padding:5px}.selectionButton svg{height:16px;width:16px}.hiddenSelection{display:none}.selectionCount{font-size:11px}.tableScroll{padding:0 9px}.callTable th:nth-child(3){width:38px}.callTable th:nth-child(4){width:72px}.callTable th:nth-child(5){width:69px}.callTable th:last-child,.callTable td:last-child{display:none}.callTable td{height:51px;font-size:11px}.fileButton{font-size:12px}.cellSub,.rowError,.status{font-size:11px}.statusWarning{padding:2px 3px}.reviewWorkspace{grid-template-columns:164px minmax(0,1fr)}.reviewList .tableScroll{padding:0 6px}.reviewList .fileButton{font-size:11px}.readerHead{padding:18px 15px 15px}.readerHead h2{font-size:13px}.readerBody{padding:0 15px 18px}.readerMeta{gap:8px}.transcript{gap:9px;padding:17px 0}.transcript p{font-size:13px}.notice,.errorBanner{flex-wrap:wrap;padding:9px 11px;font-size:11px;gap:7px}.notice>span,.errorBanner>span{min-width:75%}.progressSummary{padding:13px 15px;margin-bottom:12px}.progressSummary>div{font-size:11px}.dialogBody{padding:19px 22px 22px}}
+@media(max-width:800px){.app,.settingsCollapsed{grid-template-columns:142px minmax(0,1fr)}.main{padding:0 14px 14px}.mainHeader{min-height:64px;gap:10px}.heading h1{font-size:17px}.headingCopy{gap:8px}.headingCopy>span{font-size:11px}.toolbar{gap:2px}.toolbar>.iconButton{padding:5px 7px}.toolbar>.iconButton span{display:none}.sidebar{padding:22px 9px 16px}.brand{padding:0 5px;gap:7px;font-size:20px}.brandImage{width:29px;height:29px}.newBatch{min-height:35px}.navButton{padding:8px 7px;font-size:11px;gap:7px}.version{padding-left:7px}.workspaceTools{min-height:46px;gap:10px;padding:0 12px}.filters{gap:11px}.filters button{font-size:11px;gap:4px}.filters button>span:not(:empty){font-size:11px;padding:0 3px}.viewSwitch{padding:2px}.viewSwitch button{font-size:11px;min-height:26px;padding:4px 6px}.selectionTools{min-height:46px;padding:6px 12px;gap:7px}.searchField{flex-basis:160px;min-width:110px;height:32px;padding:0 8px}.searchField input{font-size:11px}.searchField kbd{display:none}.selectionActions{gap:1px}.selectionButton{height:28px;width:26px;padding:5px}.selectionButton svg{height:16px;width:16px}.hiddenSelection{display:none}.selectionCount{font-size:11px}.tableScroll{padding:0 9px}.callTable th:nth-child(3){width:38px}.callTable th:nth-child(4){width:72px}.callTable th:nth-child(5){width:69px}.callTable th:last-child,.callTable td:last-child{display:none}.callTable td{height:64px;font-size:11px}.fileButton{font-size:12px}.cellSub,.rowError,.status{font-size:11px}.statusWarning{padding:2px 3px}.reviewWorkspace{grid-template-columns:164px minmax(0,1fr)}.reviewList .tableScroll{padding:0 6px}.reviewList .fileButton{font-size:11px}.readerHead{padding:18px 15px 15px}.readerHead h2{font-size:13px}.readerBody{padding:0 15px 18px}.readerMeta{gap:8px}.transcript{gap:8px;padding:8px 0}.transcript p{font-size:13px}.notice,.errorBanner{flex-wrap:wrap;padding:9px 11px;font-size:11px;gap:7px}.notice>span,.errorBanner>span{min-width:75%}.progressSummary{padding:13px 15px;margin-bottom:12px}.progressSummary>div{font-size:11px}.dialogBody{padding:19px 22px 22px}}
 @media(max-height:700px){.mainHeader,.settingsHead{min-height:64px}.settingsBody .settingGroup{padding-top:18px;padding-bottom:18px}.settingsBody .settingGroup:first-child{padding-top:0}.scopeTabs{margin-bottom:16px}.progressSummary{padding-top:12px;padding-bottom:12px}}
 @media(prefers-reduced-motion:reduce){.selectContent,.batchMenu,.dialog,.settingsDialog{animation:none}}
 /* Keep the overflow action compact and avoid an empty grid cell when settings are hidden. */
@@ -310,3 +310,27 @@
 .compactPagination .pageControls{gap:2px}
 .compactPagination .pageJump input{width:36px}
 @media(max-width:800px){.runControls{gap:5px}.runControls .primaryButton{min-height:34px;padding:7px 11px}.runControls .secondaryButton{font-size:11px;padding:5px 8px}.toolbar{gap:4px}.pagination{padding:5px 12px}.pagination .pageControls{gap:3px}}
+
+/* Per-call synthesis and playback alignment. */
+.callTable th:nth-child(5){width:128px}
+.readerHead>div:first-child>div{margin-top:8px;max-width:260px}
+.transcriptSeek{display:block;width:100%;padding:0;border:0;background:transparent;color:inherit;text-align:left;font:inherit;line-height:inherit;user-select:text;cursor:pointer;border-radius:3px}
+.transcriptSeek:hover{color:var(--accent)}
+.transcriptSeek:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+.playingRow{background:var(--accent-soft);box-shadow:inset 3px 0 var(--accent);border-radius:5px;padding-left:12px;margin-left:-12px;padding-right:8px;margin-right:-8px}
+.player{flex-wrap:wrap}
+.playbackNotice{font-size:11px;line-height:1.5;color:var(--muted);flex-basis:100%}
+@media(max-width:800px){.callTable th:nth-child(5){width:104px}}
+
+.mutedNote{display:block;width:fit-content;margin:6px 0;color:var(--muted);font-size:11px;line-height:1.4}
+.infoHeading{font-size:13px;line-height:1.5;margin:0 0 8px}
+.infoHeading:not(:first-child){margin-top:20px}
+
+/* Keep output names readable while giving active progress details room. */
+.overview .callTable th:first-child{width:3%}
+.overview .callTable th:nth-child(2){width:34%}
+.overview .callTable th:nth-child(3){width:6%}
+.overview .callTable th:nth-child(4){width:14%}
+.overview .callTable th:nth-child(5){width:40%}
+.overview .callTable th:last-child{width:3%}
+.overview .callTable td:nth-child(5)>div{width:100%;max-width:none}

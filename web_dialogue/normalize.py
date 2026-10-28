@@ -70,6 +70,7 @@ def normalize(payload, catalog=None):
             line["id"] = row["id"]
         result["rows"] = imported["rows"]
         result["warnings"] = imported["warnings"] + result["warnings"]
+        result["info_notes"] = imported["info_notes"]
         result["sources"] = imported["sources"]
         result["muted_count"] = imported["muted_count"]
         from .fingerprints import dialogue_fingerprint

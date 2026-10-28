@@ -16,6 +16,8 @@ class XMLPairTests(unittest.TestCase):
   self.assertEqual(r['rows'][3]['text'],'已静音片段');self.assertTrue(r['rows'][3]['muted'])
   self.assertEqual(len(r['script']['lines']),4)
   self.assertEqual(r['muted_count'],1)
+  self.assertEqual(len(r['info_notes']),2)
+  self.assertTrue(all(note in r['warnings'] for note in r['info_notes']))
   self.assertTrue(any(x['overlap'] for x in r['rows']))
   self.assertNotIn('fictional-demo-001',json.dumps(r))
  def test_dtd_and_entity_rejected(self):
@@ -35,7 +37,9 @@ class XMLPairTests(unittest.TestCase):
    with self.assertRaises(InputError):normalize(p)
  def test_metadata_disagreement_warns(self):
   p=payload();p['xml_files'][0]['content']=p['xml_files'][0]['content'].replace('<callInfo>', '<callInfo><startTime>one</startTime>');p['xml_files'][1]['content']=p['xml_files'][1]['content'].replace('<callInfo>', '<callInfo><startTime>two</startTime>')
-  self.assertTrue(any('开始时间' in x for x in normalize(p)['warnings']))
+  r=normalize(p)
+  self.assertTrue(any('开始时间' in x for x in r['warnings']))
+  self.assertFalse(any('开始时间' in x for x in r['info_notes']))
  def test_muted_text_not_exported(self):
   p=payload();p['xml_files'][1]['content']=p['xml_files'][1]['content'].replace('这是一句虚构的屏蔽段落。','secret-never-speak')
   r=normalize(p);self.assertNotIn('secret-never-speak',json.dumps(r))

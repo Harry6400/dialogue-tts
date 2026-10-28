@@ -26,7 +26,7 @@ function server(initial: WorkspaceSummary | null = summary(), matchEvidence=fals
     else if (url === '/api/workspaces/import') {workspace = summary(); data = workspace;}
     else if (url.endsWith('/report')) data = {report_id: 'a'.repeat(32), filename: '对白-批次清单-aaaaaaaa.csv', workspace_id: workspace!.id, rows: 120000, items: 60000, sources: 120000, size: 1024, revision: 8, sha256: 'c'.repeat(64), scope: 'whole_workspace', schema_version: 1, content_type: 'text/csv; charset=utf-8'};
     else if (url.startsWith('/api/reports/') && url.endsWith('/discard')) data = {ok: true, report_id: 'a'.repeat(32)};
-    else if (url.includes('/items/')) data = {filename: '000123.mp3', item: currentItem, workspace_id: workspace?.id, rows: [{id: 0, speaker: 'AGENT', text: matchEvidence?'先生，您好。':'虚构会议室预约。', start_ms: 0}, {id: 1, speaker: 'USER', text: '请预留一小时。', start_ms: 500}, {id: 2, speaker: 'USER', text: '禁止显示的静音内容', muted: true}], warnings: [], sources: [{name: '0001231.xml', role: 'AGENT', segments: 1}, {name: '0001230.xml', role: 'USER', segments: 2}], voice_choice: {user: matchEvidence?'zh-CN-YunxiNeural':'zh-CN-XiaoyiNeural', reason: matchEvidence?'称呼：先生':'称呼未判定',address:matchEvidence?'male':'undetermined',...(matchEvidence?{evidence_row_id:0}:{})}, muted_count: 1};
+    else if (url.includes('/items/')) data = {filename: '000123.mp3', item: currentItem, workspace_id: workspace?.id, rows: [{id: 0, speaker: 'AGENT', text: matchEvidence?'先生，您好。':'虚构会议室预约。', start_ms: 0}, {id: 1, speaker: 'USER', text: '请预留一小时。', start_ms: 500}, {id: 2, speaker: 'USER', text: '禁止显示的静音内容', muted: true}], warnings: ['按毫秒排序，不还原原始时长。', '两份来源开始时间不一致。'], info_notes: ['按毫秒排序，不还原原始时长。'], sources: [{name: '0001231.xml', role: 'AGENT', segments: 1}, {name: '0001230.xml', role: 'USER', segments: 2}], voice_choice: {user: matchEvidence?'zh-CN-YunxiNeural':'zh-CN-XiaoyiNeural', reason: matchEvidence?'称呼：先生':'称呼未判定',address:matchEvidence?'male':'undetermined',...(matchEvidence?{evidence_row_id:0}:{})}, muted_count: 1};
     else if (url.endsWith('/selection')) {const selected = body?.mode === 'clear' ? false : body?.selected !== false; const count = selected ? body?.mode === 'all' ? 60000 : 1 : 0; currentItem = {...currentItem, selected}; workspace = {...workspace!, selected: count, ready_selected: count, selection_id: 'selection-two'}; data = {selection_id: 'selection-two', count, hidden_count: 0, selection_query: {q: body?.q || '', filter: body?.filter || 'all', issue: body?.issue || ''}};}
     else if (url.endsWith('/start') || url.endsWith('/resume')) {workspace = {...workspace!, status: 'running', can_edit: false, has_run_plan: true}; data = workspace;}
     else if (url.endsWith('/settings')) {
@@ -223,7 +223,7 @@ it('restores access before resuming and never resumes automatically after restar
 
 it('shows actual source roles even when the filename suffixes are reversed', async () => {
   server(); render(<App/>); fireEvent.click(await screen.findByRole('button',{name:'000123.mp3'})); await screen.findAllByText('虚构会议室预约。');
-  fireEvent.click(screen.getByRole('button', {name: '查看真实源文件'}));
+  fireEvent.click(screen.getByRole('button', {name: '查看通话信息'}));
   const agentName = screen.getByText('0001231.xml');
   const customerName = screen.getByText('0001230.xml');
   expect(agentName.closest('li')).toHaveTextContent('客服');
@@ -365,7 +365,7 @@ it('uses batch filters as the single list scope while preserving selection and r
   await waitFor(() => expect(backend.calls.filter(call => call.path.includes('?q=')).at(-1)?.path).toContain('filter=saved'));
   expect(screen.getByRole('heading', {name: 'input'})).toHaveAttribute('title', 'input');
   fireEvent.click(screen.getByRole('button', {name: /^进行中/}));
-  expect(screen.getByTestId('task-progress')).toBeVisible();
+  expect(screen.queryByTestId('task-progress')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', {name: /^全部/}));
   expect(screen.queryByTestId('task-progress')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', {name: '正文核对'}));
@@ -501,4 +501,15 @@ it('blocks updates for a retained legacy audio capture while leaving close confi
   const host = window as Window & {dialogueUpdateSafety?: () => {unsaved: boolean}; dialogueCloseSafety?: () => {unsaved: boolean}};
   await waitFor(() => expect(host.dialogueUpdateSafety?.().unsaved).toBe(true));
   expect(host.dialogueCloseSafety?.().unsaved).toBe(false);
+});
+
+it('moves routine notes into call information but keeps actual warnings visible',async()=>{
+  server();render(<App/>);fireEvent.click(await screen.findByRole('button',{name:'正文核对'}));
+  expect(await screen.findByText('两份来源开始时间不一致。')).toBeVisible();
+  expect(screen.getByText('跳过 1 段静音')).toBeVisible();
+  expect(screen.queryByText('按毫秒排序，不还原原始时长。')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'查看通话信息'}));
+  expect(screen.getByRole('dialog',{name:'通话信息'})).toBeVisible();
+  expect(screen.getByRole('heading',{name:'处理说明'})).toBeVisible();
+  expect(screen.getByText('按毫秒排序，不还原原始时长。')).toBeVisible();
 });

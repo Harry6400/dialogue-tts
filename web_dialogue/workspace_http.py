@@ -65,6 +65,7 @@ def get_workspace(handler,path):
         elif len(parts)==2 and parts[1]=='next-issue':result=work.next_issue(parts[0],q=query.get('q',''),issue=query.get('issue',''),after_id=query.get('after_id'),limit=query.get('limit',100))
         elif len(parts)==2 and parts[1]=='snapshot':result=work.snapshot(parts[0],query.get('revision',0))
         elif len(parts)==3 and parts[1]=='items':result=work.detail(parts[0],parts[2])
+        elif len(parts)==4 and parts[1]=='items' and parts[3]=='timeline':result=work.timeline(parts[0],parts[2])
         elif len(parts)==4 and parts[1]=='items' and parts[3]=='audio':
             _audio(handler,*work.audio_lease(parts[0],parts[2]));return True
         else:raise KeyError('工作区接口不存在。')

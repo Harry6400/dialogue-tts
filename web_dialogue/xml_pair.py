@@ -112,12 +112,14 @@ def parse_xml_pair(payload):
         row['overlap'] = any(row['speaker'] != other['speaker'] and row['start_ms'] < other['end_ms'] and row['end_ms'] > other['start_ms'] for other in combined)
         del row['_file_index']; del row['_segment_index']
     muted_count = sum(row['muted'] for row in combined)
-    warnings = ['按毫秒起点排序串行配音，不还原原始时长或重叠说话。']
+    info_notes = ['按毫秒起点排序串行配音，不还原原始时长或重叠说话。']
+    warnings = list(info_notes)
     for label, values in (('开始时间', starts), ('时长', durations)):
         if all(values) and values[0] != values[1]:
             warnings.append('相同 callReference 的' + label + '不一致；仍按段内时间排序，请核对质量。')
     if muted_count:
-        warnings.append(f'已保护 {muted_count} 个静音片段：预览不显示原文，生成时跳过，不发送微软。')
+        note=f'已保护 {muted_count} 个静音片段：预览不显示原文，生成时跳过，不发送微软。'
+        info_notes.append(note);warnings.append(note)
     if not any(not row['muted'] for row in combined):
         raise XMLImportError('所有片段均被静音保护，没有可合成内容。')
-    return {'_call_reference': refs[0], 'rows': combined, 'sources': sources, 'warnings': warnings, 'muted_count': muted_count}
+    return {'_call_reference': refs[0], 'rows': combined, 'sources': sources, 'warnings': warnings, 'info_notes': info_notes, 'muted_count': muted_count}

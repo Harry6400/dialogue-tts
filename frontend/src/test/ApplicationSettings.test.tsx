@@ -1,4 +1,4 @@
-import {act, fireEvent, render, screen} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {expect, it, vi} from 'vitest';
 import {ApplicationSettings} from '../app/ApplicationSettings';
 import type {WorkspaceModel} from '../app/useWorkspace';
@@ -8,7 +8,9 @@ function setup(overrides: {busy?: boolean; running?: boolean; nativeFailure?: st
   const call = vi.fn().mockResolvedValue({kind: 'success', value: {state: 'latest', current_version: '1.2.3', latest_version: '1.2.3'}});
   const model = {
     workspace: overrides.noWorkspace ? null : {input_folder: {path: '/fictional/source'}},
-    config: {can_shutdown: true, app_version: '0.4.7', mac_build_number: overrides.noMacBuild ? null : '11'},
+    config: {can_shutdown: true, app_version: '0.4.7', mac_build_number: overrides.noMacBuild ? null : '11', retry_attempts: 5},
+    api: {setConnectionMode: vi.fn().mockResolvedValue({ok: true, connection_mode: 'system_proxy'}), setRetryAttempts: vi.fn().mockImplementation(async retry_attempts => ({ok: true, retry_attempts}))},
+    setConfig: vi.fn(),
     native: {current: {call}},
     perform: vi.fn(async (_label: string, operation: () => Promise<void>) => {await operation();}),
     nativeValue: (result: {value: unknown}) => {
@@ -115,4 +117,45 @@ it('requests native exit without marking the empty workspace as pending', () => 
   fireEvent.click(screen.getByRole('button', {name: '退出对白'}));
   expect(call).toHaveBeenCalledWith('request_close', {});
   expect(model.perform).not.toHaveBeenCalled();
+});
+
+it('defaults to direct and saves an explicit system proxy choice', async () => {
+  const {model} = setup();
+  expect(screen.getByRole('button', {name: '直连'})).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(screen.getByRole('button', {name: '系统代理'}));
+  await waitFor(() => expect(model.api.setConnectionMode).toHaveBeenCalledWith('system_proxy'));
+  await waitFor(() => expect(model.setConfig).toHaveBeenCalledOnce());
+});
+it('does not allow changing transport during synthesis', () => {
+  setup({running: true});
+  expect(screen.getByRole('button', {name: '直连'})).toBeDisabled();
+  expect(screen.getByRole('button', {name: '系统代理'})).toBeDisabled();
+});
+
+it('defaults to five connection attempts and persists a changed limit', async () => {
+  const {model} = setup();
+  const input = screen.getByRole('spinbutton', {name: '连接尝试次数'});
+  expect(input).toHaveValue(5);
+  expect(input).toHaveAttribute('min', '1');
+  expect(input).toHaveAttribute('max', '30');
+  fireEvent.change(input, {target: {value: '30'}});
+  fireEvent.click(screen.getByRole('button', {name: '保存'}));
+  await waitFor(() => expect(model.api.setRetryAttempts).toHaveBeenCalledWith(30));
+  expect(model.setConfig).toHaveBeenCalledWith(expect.any(Function));
+  expect(await screen.findByRole('status')).toHaveTextContent('已保存。');
+});
+
+it('rejects an out-of-range value without sending it to the server', async () => {
+  const {model} = setup();
+  const input = screen.getByRole('spinbutton', {name: '连接尝试次数'});
+  fireEvent.change(input, {target: {value: '31'}});
+  fireEvent.submit(input.closest('form')!);
+  expect(await screen.findByRole('alert')).toHaveTextContent('请输入 1–30 之间的整数。');
+  expect(model.api.setRetryAttempts).not.toHaveBeenCalled();
+});
+
+it('locks the attempt setting while synthesis is running', () => {
+  setup({running: true});
+  expect(screen.getByRole('spinbutton', {name: '连接尝试次数'})).toBeDisabled();
+  expect(screen.getByRole('button', {name: '保存'})).toBeDisabled();
 });
