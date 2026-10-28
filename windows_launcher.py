@@ -44,6 +44,34 @@ class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
                 state['running'] = state['running'] or any(item['process'].poll() is None for item in server.jobs.items.values()) or bool(server.batches.active)
         return state
 
+    def save_workspace_report(self, report_id):
+        """A CSV destination comes only from this native save panel."""
+        import re
+        if not isinstance(report_id, str) or not re.fullmatch(r'[a-f0-9]{32}', report_id):
+            return {'ok': False, 'error': '清单标识无效'}
+        if self._closing or getattr(getattr(self, '_update_server', None), 'update_in_progress', False):
+            return {'ok': False, 'error': '正在退出或准备更新，请稍后保存清单'}
+        if not self._lock.acquire(blocking=False):
+            return {'ok': False, 'error': '请先完成当前保存'}
+        try:
+            import webview
+            info = self._native_workspace_request('/api/native/reports/info', {'report_id': report_id})
+            name = info.get('filename')
+            if not isinstance(name, str) or Path(name).name != name or '/' in name or '\\' in name or '\x00' in name or not name.lower().endswith('.csv'):
+                raise ValueError('清单名称无效')
+            chosen = self._window.create_file_dialog(webview.FileDialog.SAVE, save_filename=name, file_types=('CSV (*.csv)',))
+            if not chosen:
+                return {'cancelled': True}
+            value = chosen if isinstance(chosen, str) else chosen[0]
+            target = Path(value).absolute()
+            if target.suffix.lower() != '.csv':
+                raise ValueError('请选择新的 CSV 文件')
+            return self._native_workspace_request('/api/native/reports/save', {'report_id': report_id, 'path': str(target)})
+        except (OSError, ValueError, TypeError, KeyError, IndexError):
+            return {'ok': False, 'error': '保存清单失败，请选择可写的新 CSV 文件；已有任务和音频保留'}
+        finally:
+            self._lock.release()
+
     def save_download(self, route):
         if self._closing: return {'ok': False, 'error': '正在退出'}
         if getattr(getattr(self,"_update_server",None),"update_in_progress",False): return {"ok":False,"error":"正在准备更新"}
@@ -395,6 +423,10 @@ $b.Save($args[1],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()
         else: raise
     finally:
         server.shutdown(); server.server_close()
+        try:
+            if getattr(server, 'reports', None): server.reports.close()
+        except (OSError, ValueError):
+            pass  # Derived CSV cache can be regenerated; audio cleanup still runs.
         if getattr(server, 'workspaces', None): server.workspaces.close()
         server.jobs.close()
         downloads._close_folders()

@@ -1,13 +1,9 @@
 """Shared, fail-closed native exit decision. Prompts belong to the platform shell."""
 def workspace_safety(server):
     """Read every workspace; an unavailable/malformed manager is never idle."""
-    manager = getattr(server, 'workspaces', None)
-    if manager is None:
-        return dict(busy=False, unsaved=False, saving=False, pending=False)
-    try: state = manager.safety()
-    except Exception: return None
-    if not isinstance(state, dict) or any(type(state.get(k)) is not bool for k in ('busy', 'unsaved', 'saving', 'pending')):
-        return None
+    from web_dialogue.runtime_safety import combined_safety
+    state = combined_safety(getattr(server, 'workspaces', None), getattr(server, 'reports', None))
+    if state.get('unknown') is True: return None
     return {key: state[key] for key in ('busy', 'unsaved', 'saving', 'pending')}
 
 

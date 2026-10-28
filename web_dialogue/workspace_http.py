@@ -5,14 +5,9 @@ import re
 from .normalize import InputError
 
 
-def _safety(work):
-    try:
-        result=work.safety()
-        if not isinstance(result,dict) or any(type(result.get(k)) is not bool for k in ('busy','unsaved','saving','pending')):
-            raise ValueError('Invalid safety result')
-        return result
-    except Exception:
-        return {'busy':True,'unsaved':True,'saving':True,'pending':True,'unknown':True}
+def _safety(work, reports=None):
+    from .runtime_safety import combined_safety
+    return combined_safety(work, reports)
 
 
 def _audio(handler,handle,filename,fingerprint,size):
@@ -49,7 +44,7 @@ def get_workspace(handler,path):
     try:
         allowed={'q','filter','issue','page','limit','sort'} if len(parts)==1 and parts!=['safety'] else {'q','issue','after_id','limit'} if len(parts)==2 and parts[1]=='next-issue' else {'revision'} if len(parts)==2 and parts[1]=='snapshot' else set()
         if set(query)-allowed or any(len(values)!=1 for values in parameters.values()):raise InputError('工作区查询参数无效。')
-        if parts==['safety']:result=_safety(work)
+        if parts==['safety']:result=_safety(work,getattr(handler.server,'reports',None))
         elif not parts:result=work.list()
         elif len(parts)==1:result=work.page(parts[0],q=query.get('q',''),filter=query.get('filter','all'),page=query.get('page',1),limit=query.get('limit',100),sort=query.get('sort','filename'),issue=query.get('issue',''))
         elif len(parts)==2 and parts[1]=='next-issue':result=work.next_issue(parts[0],q=query.get('q',''),issue=query.get('issue',''),after_id=query.get('after_id'),limit=query.get('limit',100))
@@ -72,7 +67,7 @@ def post_workspace(handler,path,payload):
         access=handler.server.native_access
         if path=='/api/native/workspaces/safety':
             if payload:raise InputError('安全核验不接受参数。')
-            return _safety(work)
+            return _safety(work,getattr(handler.server,'reports',None))
         if path=='/api/native/folders':
             if not isinstance(payload.get('path'),str) or payload.get('kind') not in ('input','output'):raise InputError('目录注册参数无效。')
             return access.register(payload.get('path'),payload.get('kind'))

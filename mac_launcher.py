@@ -36,6 +36,10 @@ def main():
         server.serve_forever()
     finally:
         server.server_close()
+        try:
+            if getattr(server, 'reports', None): server.reports.close()
+        except (OSError, ValueError):
+            pass  # Derived CSV cache can be regenerated; audio cleanup still runs.
         if getattr(server, 'workspaces', None): server.workspaces.close()
         server.jobs.close()
         if installation_lease: installation_lease.close()

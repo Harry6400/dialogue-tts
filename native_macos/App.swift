@@ -687,6 +687,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         else { workspaceSaves -= 1; reply(["ok": false, "error": "请选择结果目录"]) }
     }
 
+    private func saveWorkspaceReport(_ reportID: String, reply: @escaping ([String: Any]) -> Void) {
+        workspaceSaves += 1
+        nativeRequest("/api/native/reports/info", ["report_id": reportID]) { [weak self] info in
+            guard let self = self else { return }
+            guard info["ok"] as? Bool != false, let name = info["filename"] as? String,
+                  name.lowercased().hasSuffix(".csv"), !name.contains("/"), !name.contains("\\"), !name.contains("\0") else {
+                self.workspaceSaves -= 1
+                reply(["ok": false, "error": "清单尚未准备好，请重新导出"]); return
+            }
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = name
+            panel.allowedContentTypes = [.commaSeparatedText]
+            panel.allowsOtherFileTypes = false
+            panel.canCreateDirectories = true
+            panel.message = "保存当前批次的完整清单。每份源 XML 一行，不包含正文或完整目录路径。已有文件不会覆盖。"
+            panel.beginSheetModal(for: self.window) { [weak self] response in
+                guard let self = self else { return }
+                guard response == .OK, let target = panel.url else {
+                    self.workspaceSaves -= 1; reply(["cancelled": true]); return
+                }
+                guard target.pathExtension.lowercased() == "csv" else {
+                    self.workspaceSaves -= 1; reply(["ok": false, "error": "请选择新的 CSV 文件"]); return
+                }
+                self.nativeRequest("/api/native/reports/save", ["report_id": reportID, "path": target.path]) { result in
+                    self.workspaceSaves -= 1
+                    reply(result)
+                }
+            }
+        }
+    }
+
     private func handleFolderMessage(_ body: Any) {
         guard let message = body as? [String: Any], let requestID = message["request_id"] as? String,
               requestID.count <= 128, let method = message["method"] as? String,
@@ -760,6 +791,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                     reply(adopted)
                 }
             }
+        case "save_workspace_report":
+            guard let reportID = args["report_id"] as? String,
+                  reportID.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil,
+                  Set(args.keys) == Set(["report_id"]) else { reply(["ok": false, "error": "清单请求无效"]); return }
+            saveWorkspaceReport(reportID, reply: reply)
         case "save_to_output":
             guard let id = args["folder_id"] as? String,
                   let route = args["resource_path"] as? String, route.range(of: "^/api/(jobs/[a-f0-9]{32}/audio|batches/[a-f0-9]{32}/audio/[0-9]{3})$", options: .regularExpression) != nil else { reply(["ok": false, "error": "输出请求无效"]); return }

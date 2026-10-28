@@ -362,18 +362,24 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             if not 0 < length <= MAX_BODY:
                 return self.json({"error": "请求为空或超过64MiB，请缩小输入文件。"}, 413)
-            if (private or urlsplit(self.path).path.startswith('/api/workspaces')) and length > 256 * 1024:
+            if (private or urlsplit(self.path).path.startswith(('/api/workspaces','/api/reports/'))) and length > 256 * 1024:
                 return self.json({'error':'工作区请求超过大小限制。'},413)
             self.connection.settimeout(15)
             payload = json.loads(self.rfile.read(length).decode("utf-8-sig"))
             path = urlsplit(self.path).path
+            from .report_http import is_report_post, post_report
+            if is_report_post(path):
+                if urlsplit(self.path).query:
+                    raise InputError('清单固定导出整个批次，不接受查询参数。')
+                return self.json(post_report(self.server, path, payload))
             if path.startswith('/api/workspaces') or path.startswith('/api/native/'):
                 if not isinstance(payload, dict):
                     raise InputError('请求必须为对象。')
                 from .workspace_http import post_workspace
                 return self.json(post_workspace(self, path, payload))
             if path == "/api/update/lock":
-                if getattr(self.server, 'workspaces', None) and any(self.server.workspaces.safety().values()):
+                from .runtime_safety import combined_safety
+                if any(combined_safety(getattr(self.server, 'workspaces', None), getattr(self.server, 'reports', None)).values()):
                     return self.json({'error':'请先暂停任务并保存完整音频，再更新。'},409)
                 with self.server.jobs.lock, self.server.batches.lock:
                     if any(item["process"].poll() is None for item in self.server.jobs.items.values()) or self.server.batches.active:
@@ -464,6 +470,7 @@ def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None
     server.batches = Batches(server.jobs, server.voice_catalog["voices"])
     server.jobs.batches = server.batches
     server.workspaces = None
+    server.reports = None
     server.native_access = None
     server.workspace_access = None
     server.native_token = None
@@ -480,6 +487,8 @@ def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None
         server.workspace_access = server.native_access
         server.workspaces = Workspaces(state_dir, server.jobs, server.native_access, server.voice_catalog)
         server.jobs.workspaces = server.workspaces
+        from .workspace_reports import WorkspaceReports
+        server.reports = WorkspaceReports(server.workspaces.path, Path(state_dir) / 'reports')
     return server
 
 
@@ -499,7 +508,10 @@ def main():
         pass
     finally:
         server.server_close()
-        server.jobs.close()
+        try:
+            if server.reports is not None: server.reports.close()
+        finally:
+            server.jobs.close()
 
 
 if __name__ == "__main__":
