@@ -69,7 +69,7 @@ class WorkerNetworkTests(unittest.TestCase):
             folder=Path(root)
             (folder/'worker_status.json').write_text(json.dumps({'completed':2,'total':29,'connection_mode':'direct','phase':'connecting'}))
             with patch('web_dialogue.worker.generate',new=AsyncMock(side_effect=error)), self.assertRaises(SystemExit):main(folder)
-            fact=json.loads((folder/'worker_status.json').read_text())
+            fact=json.loads((folder/'worker_status.json').read_text(encoding='utf-8'))
             self.assertIn('直连',fact['error']);self.assertIn('2/29 段',fact['error'])
             self.assertIn('被中断',fact['error']);self.assertNotIn('切换',fact['error']);self.assertNotIn('private',fact['error'])
             self.assertEqual(fact['failed_phase'],'connecting')
@@ -111,7 +111,7 @@ class WorkerNetworkTests(unittest.TestCase):
                 asyncio.run(generate(folder))
             self.assertEqual(speak.call_count,5)
             self.assertTrue(all(c.kwargs['proxy']=='http://proxy.test:8080' for c in speak.call_args_list))
-            progress=json.loads((folder/'worker_status.json').read_text())
+            progress=json.loads((folder/'worker_status.json').read_text(encoding='utf-8'))
             self.assertEqual(progress['attempt'],5)
             self.assertEqual(progress['attempt_limit'],5)
             self.assertEqual(progress['completed'],1)
@@ -132,7 +132,7 @@ class WorkerNetworkTests(unittest.TestCase):
             with patch('web_dialogue.worker.retry_delay_seconds',return_value=0), \
                  patch('edge_tts.Communicate',return_value=Stream()) as speak, self.assertRaises(SystemExit):
                 main(folder)
-            result=json.loads((folder/'worker_status.json').read_text())
+            result=json.loads((folder/'worker_status.json').read_text(encoding='utf-8'))
             self.assertEqual(speak.call_count,5)
             self.assertEqual(result['attempt'],5)
             self.assertEqual(result['attempt_limit'],5)
