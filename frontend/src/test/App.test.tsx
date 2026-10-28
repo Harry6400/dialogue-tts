@@ -18,6 +18,7 @@ function server(initial: WorkspaceSummary | null = summary(), matchEvidence=fals
     const url = String(path);
     const body = options?.body ? JSON.parse(String(options.body)) as Record<string, unknown> : undefined;
     calls.push({path: url, body});
+    if(url.includes('/items/')&&workspace?.input_folder.valid===false)return new Response(JSON.stringify({error:'来源目录尚未恢复授权。'}),{status:403,headers:{'Content-Type':'application/json'}});
     let data: unknown;
     if (url === '/api/config') data = {token: 'test-token', voices: [{id: 'zh-CN-XiaoxiaoNeural', label: '晓晓', gender: 'Female'}, {id: 'zh-CN-XiaoyiNeural', label: '晓伊', gender: 'Female'}], can_shutdown: true};
     else if (url === '/api/workspaces/safety') data=globalSafety;
@@ -92,10 +93,13 @@ it('restores access before resuming and never resumes automatically after restar
   render(<App/>); await screen.findByTestId('resume');
   expect(screen.getByTestId('resume')).toBeDisabled();
   expect(backend.calls.some(call => call.path.endsWith('/resume'))).toBe(false);
+  await screen.findAllByText('此通对话暂无可显示正文。');
+  expect(screen.queryByText('虚构会议室预约。')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', {name: '恢复访问'}));
   await waitFor(() => expect(restore).toHaveBeenCalledWith('workspace-one'));
   await waitFor(() => expect(screen.queryByRole('button', {name: '恢复访问'})).not.toBeInTheDocument());
   expect(screen.getByTestId('resume')).toBeDisabled();
+  await screen.findAllByText('虚构会议室预约。');
   fireEvent.click(screen.getByTestId('consent')); fireEvent.click(screen.getByTestId('resume'));
   await screen.findByTestId('pause');
   expect(backend.calls.filter(call => call.path.endsWith('/resume'))).toHaveLength(1);
@@ -121,7 +125,7 @@ it('keeps updater safety clear of its own installation request while locking the
   (window as NativeHost).pywebview = {api: {check_for_update: vi.fn().mockResolvedValue({state: 'available', current_version: '0.3.4', latest_version: '0.4.0'}), install_update: install}};
   render(<App/>);
   await waitFor(() => expect(screen.getByRole('button', {name: '选择 XML 文件夹'})).toBeEnabled());
-  fireEvent.click(screen.getByRole('button', {name: '设置'}));
+  fireEvent.click(screen.getByRole('button', {name: '应用设置'}));
   fireEvent.click(screen.getByRole('button', {name: '检查更新'}));
   fireEvent.click(await screen.findByRole('button', {name: '下载并安装更新'}));
   await waitFor(() => expect(install).toHaveBeenCalledOnce());
@@ -179,7 +183,7 @@ it('continues an interrupted settings check without claiming online consent',asy
 it('locates only the visible row supplied by the actual honorific matcher',async()=>{
   server(summary(),true);render(<App/>);
   await screen.findByRole('checkbox',{name:'选择 000123.mp3'});
-  fireEvent.click(screen.getByRole('button',{name:'核对'}));
+  fireEvent.click(screen.getByRole('button',{name:'正文核对'}));
   const region=screen.getByRole('region',{name:'完整核对'});
   const evidence=await within(region).findByRole('button',{name:'定位称呼匹配依据'});
   const scroll=vi.spyOn(HTMLElement.prototype,'scrollIntoView');
@@ -187,4 +191,18 @@ it('locates only the visible row supplied by the actual honorific matcher',async
   expect(scroll).toHaveBeenLastCalledWith({block:'center',behavior:'auto'});
   expect(within(region).getByText('先生，您好。').closest('[data-row-id="0"]')).toHaveFocus();
   scroll.mockRestore();
+});
+
+
+it('closes the batch menu with Escape without leaving transcript review',async()=>{
+  server();render(<App/>);
+  await screen.findByRole('checkbox',{name:'选择 000123.mp3'});
+  fireEvent.click(screen.getByRole('button',{name:'正文核对'}));
+  expect(screen.getByRole('button',{name:'正文核对'})).toHaveAttribute('aria-pressed','true');
+  const trigger=screen.getByRole('combobox',{name:'切换本机批次'});
+  fireEvent.keyDown(trigger,{key:'Enter'});
+  const menu=await screen.findByRole('listbox');
+  fireEvent.keyDown(menu,{key:'Escape'});
+  await waitFor(()=>expect(screen.queryByRole('listbox')).not.toBeInTheDocument());
+  expect(screen.getByRole('button',{name:'正文核对'})).toHaveAttribute('aria-pressed','true');
 });

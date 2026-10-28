@@ -16,7 +16,7 @@ function footerState({model, consent, busy, running, restoredAccess}: Props, wor
   else if (scanResume) help = '离线检查不会发送正文';
   else if (!model.output) help = '请选择结果文件夹';
   else if (!workspace.selected && !resumable) help = '勾选需要生成的通话';
-  else if (!consent) help = '勾选下方授权后可生成';
+  else if (!consent) help = '勾选联网授权后可生成';
   return {resumable, scanResume, canStart, help, title: running ? statusText[workspace.status] : resumable ? '进度已保留，可继续生成' : `已选 ${count(workspace.selected)} 通`, action: scanResume ? offlineAction : resumable ? '继续生成' : `生成 ${count(workspace.selected)} 通`};
 }
 function PrimaryAction({props, workspace, state}: {props: Props; workspace: WorkspaceSummary; state: ReturnType<typeof footerState>}) {

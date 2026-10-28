@@ -163,7 +163,7 @@ export function useWorkspace() {
     await perform('核验目录访问权限', async () => {
       if (!native.current || !workspaceId) return;
       const result = nativeValue(await native.current.call('restore_workspace_access', {workspace_id: workspaceId}));
-      if (result) {if (result.output_folder) setOutput(result.output_folder); refresh();}
+      if (result) {if (result.output_folder) setOutput(result.output_folder); refresh(); setDetailRevision(value => value + 1);}
     });
   }
 

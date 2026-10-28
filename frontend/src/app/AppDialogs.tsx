@@ -4,26 +4,10 @@ import type {WorkspaceModel} from './useWorkspace';
 import {Dialog} from './Dialog';
 import {Icon} from './Icon';
 import {AudioPlayer} from './AudioPlayer';
+import {ApplicationSettings} from './ApplicationSettings';
 import styles from './App.module.css';
 export type Modal = 'settings' | 'match' | 'names' | 'sources' | 'finish' | 'audition';
 interface Props {model: WorkspaceModel; modal: Modal; onClose: () => void; onModal: (value: Modal) => void; theme: 'light' | 'dark'; changeTheme: () => Promise<void>; onPauseExit: () => Promise<void>; auditionJob: JobSnapshot | null; auditionRunning: boolean; busy: boolean; running: boolean; onStartAudition: () => Promise<void>}
-function SettingsContent({props}: {props: Props}) {
-  const {model,theme,changeTheme,onPauseExit,onModal,busy,running,onClose} = props;
-  const {workspace,config}=model;
-  const [updateStatus, setUpdateStatus] = useState('');
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  async function checkUpdate(install = false) {
-    if (!model.native.current) return;
-    await model.perform(install ? '准备更新' : '检查更新', async () => {
-      const result = model.nativeValue(await model.native.current!.call(install ? 'install_update' : 'check_for_update', {}));
-      if (!result) return;
-      setUpdateAvailable(result.state === 'available');
-      setUpdateStatus(result.state === 'latest' ? '当前已是最新版本' : result.state === 'available' ? '发现新版本 ' + result.latest_version : 'message' in result ? result.message || '正在准备更新' : '正在准备更新');
-    });
-  }
-  async function requestClose() {if (model.native.current) model.nativeValue(await model.native.current.call('request_close', {}));}
-  return <><div className={styles.settingsRow}><span>外观</span><button className={styles.secondaryButton} onClick={() => void changeTheme()}>{theme === 'light' ? '切换深色' : '切换浅色'}</button></div><div className={styles.settingsRow}><span>应用更新</span><button className={styles.secondaryButton} disabled={busy || running} onClick={() => void checkUpdate()}>检查更新</button></div>{updateStatus && <p role="status">{updateStatus}</p>}{updateAvailable && <button className={styles.primaryButton} disabled={busy || running} onClick={() => void checkUpdate(true)}>下载并安装更新</button>}{workspace && <><hr/><div className={styles.settingsRow}><span>保存任务进度</span><button className={styles.secondaryButton} disabled={busy} onClick={() => {onClose(); void onPauseExit();}}><Icon name="exit"/>保存进度并退出</button></div><div className={styles.settingsRow}><span>结束当前任务</span><button className={styles.textButton} disabled={busy || running} onClick={() => {onModal('finish');}}>清理任务记录</button></div><p>重启后恢复任务，继续生成前会再次核验目录与联网授权。</p></>}{!workspace && config?.can_shutdown && <button className={styles.secondaryButton} onClick={() => void requestClose()}>退出对白</button>}</>;
-}
 function FinishContent({props}: {props: Props}) {
   const {model,onClose,busy,running}=props;
   const workspace=model.workspace;
@@ -37,7 +21,7 @@ function AuditionContent({props}: {props: Props}) {
 function SourcesContent({model}: {model: WorkspaceModel}) {return <>{model.detail?.sources?.length ? <ul className={styles.sources}>{model.detail.sources.map(source => <li key={source.role + source.name}><span className={styles.role}>{source.role === 'AGENT' ? '客服' : source.role === 'USER' ? '客户' : '未知/无效'}</span><span>{source.name}</span><small>{source.segments} 段</small></li>)}</ul> : <p>此通对话尚无可读取的源文件信息。</p>}<p>角色和文件名来自实际解析，不依据末位猜测角色。</p></>;}
 function DialogContent({props}: {props: Props}) {
   switch(props.modal) {
-    case 'settings': return <SettingsContent props={props}/>;
+    case 'settings': return <ApplicationSettings model={props.model} theme={props.theme} changeTheme={props.changeTheme} onPauseExit={props.onPauseExit} onFinish={() => props.onModal('finish')} onClose={props.onClose} busy={props.busy} running={props.running}/>;
     case 'finish': return <FinishContent props={props}/>;
     case 'audition': return <AuditionContent props={props}/>;
     case 'sources': return <SourcesContent model={props.model}/>;
@@ -46,5 +30,5 @@ function DialogContent({props}: {props: Props}) {
   }
 }
 export function AppDialogs(props: Props) {
-  return <Dialog title={{settings:'设置',match:'称呼匹配',names:'固定文件名',sources:'源文件',finish:'结束任务并清理记录',audition:'试听声音'}[props.modal]} onClose={props.onClose}><DialogContent props={props}/></Dialog>;
+  return <Dialog title={{settings:'应用设置',match:'称呼匹配',names:'固定文件名',sources:'源文件',finish:'结束任务并清理记录',audition:'试听声音'}[props.modal]} compact={props.modal === 'settings'} onClose={props.onClose}><DialogContent props={props}/></Dialog>;
 }

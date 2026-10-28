@@ -75,12 +75,13 @@ export function useWorkbench(model: WorkspaceModel) {
 
   useEffect(() => {
     function keyboard(event: KeyboardEvent) {
+      if (event.defaultPrevented) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f' && !modal) {event.preventDefault(); searchRef.current?.focus();}
-      if (event.key === 'Escape' && !modal && mode === 'review' && !(event.target instanceof HTMLSelectElement)) setMode('overview');
+      if (event.key === 'Escape' && !modal && !narrowOpen && mode === 'review' && !(event.target instanceof HTMLSelectElement)) setMode('overview');
     }
     document.addEventListener('keydown', keyboard);
     return () => document.removeEventListener('keydown', keyboard);
-  }, [mode, modal]);
+  }, [mode, modal, narrowOpen]);
 
   async function changeTheme() {
     const next = theme === 'light' ? 'dark' : 'light'; setTheme(next); document.documentElement.dataset.theme = next;

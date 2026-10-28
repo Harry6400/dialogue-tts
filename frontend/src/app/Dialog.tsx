@@ -34,13 +34,13 @@ function ModalFrame({children, onClose, className, label, labelledBy}: {children
   return <div className={styles.modalLayer}><dialog ref={ref} className={className} aria-label={label} aria-labelledby={labelledBy} aria-modal="true" onCancel={event => {event.preventDefault(); onClose();}}>{children}</dialog></div>;
 }
 
-export function Dialog({title, children, onClose, wide = false}: {title: string; children: ReactNode; onClose: () => void; wide?: boolean}) {
-  return <ModalFrame className={`${styles.dialog} ${wide ? styles.wideDialog : ''}`} labelledBy="dialog-title" onClose={onClose}>
+export function Dialog({title, children, onClose, wide = false, compact = false}: {title: string; children: ReactNode; onClose: () => void; wide?: boolean; compact?: boolean}) {
+  return <ModalFrame className={`${styles.dialog} ${wide ? styles.wideDialog : ''} ${compact ? styles.compactDialog : ''}`} labelledBy="dialog-title" onClose={onClose}>
     <header className={styles.dialogHead}><h2 id="dialog-title">{title}</h2><button className={styles.iconButton} aria-label="关闭弹窗" onClick={onClose}><Icon name="close"/></button></header>
     <div className={styles.dialogBody}>{children}</div>
   </ModalFrame>;
 }
 
 export function SettingsDrawer({children, onClose}: {children: ReactNode; onClose: () => void}) {
-  return <ModalFrame className={styles.settingsDialog} label="声音与设置" onClose={onClose}>{children}</ModalFrame>;
+  return <ModalFrame className={styles.settingsDialog} label="声音与输出" onClose={onClose}>{children}</ModalFrame>;
 }

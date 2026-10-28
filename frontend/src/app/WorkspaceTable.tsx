@@ -5,6 +5,20 @@ import styles from './App.module.css';
 
 import {statusLabels, selectable, count, itemTitle, shortVoiceName, voiceSource} from './format';
 
+function emptyCopy(model: WorkspaceModel) {
+  if(model.loading)return {message:'正在读取通话…',hint:'',clear:false};
+  if(model.workspace?.status==='scanning')return {message:'正在扫描文件夹，通话会逐步显示。',hint:'',clear:false};
+  if(model.query)return {message:'没有符合条件的通话',hint:'可调整状态筛选，或尝试其他通话编号。',clear:true};
+  if(model.filter==='running')return {message:'当前没有正在生成的通话',hint:'选好通话并开始生成后，进度会显示在这里。',clear:true};
+  if(model.filter==='saved')return {message:'当前批次尚无已保存结果',hint:'每通生成并保存成功后，结果会显示在这里。',clear:true};
+  if(model.filter==='error')return {message:'当前没有需要处理的问题',hint:'可返回全部通话继续查看。',clear:true};
+  return {message:'没有符合条件的通话',hint:'可调整状态筛选，或尝试其他通话编号。',clear:true};
+}
+function EmptyList({model,onClearFilters}: {model:WorkspaceModel;onClearFilters:()=>void}) {
+  const copy=emptyCopy(model);
+  return <div className={styles.listEmpty}><Icon name={model.loading?'refresh':'search'}/><p>{copy.message}</p>{copy.hint&&<span className={styles.emptyHint}>{copy.hint}</span>}{copy.clear&&<button className={styles.textButton} onClick={onClearFilters}>清除筛选</button>}</div>;
+}
+
 export function WorkspaceTable({model, onReview, context = 'overview', onClearFilters}: {model: WorkspaceModel; onReview: () => void; context?: string; onClearFilters: () => void}) {
   const {items, workspace, pending, activeId, matchedTotal, page} = model;
   const checkbox = useRef<HTMLInputElement>(null);
@@ -37,7 +51,7 @@ export function WorkspaceTable({model, onReview, context = 'overview', onClearFi
           <td><button className={styles.iconButton} aria-label={'核对 ' + (item.filename || item.id)} onClick={() => {model.setActiveId(item.id); onReview();}}><Icon name="arrow"/></button></td>
         </tr>)}</tbody>
       </table>
-      {!items.length && <div className={styles.listEmpty}><Icon name={model.loading ? 'refresh' : 'search'}/><p>{model.loading ? '正在读取通话…' : workspace?.status === 'scanning' ? '正在扫描文件夹，通话会逐步显示。' : '没有符合条件的通话'}</p>{!model.loading && workspace?.status !== 'scanning' && <button className={styles.textButton} onClick={onClearFilters}>清除筛选</button>}</div>}
+      {!items.length && <EmptyList model={model} onClearFilters={onClearFilters}/>}
     </div>
     <div className={styles.pagination}><span>{count(matchedTotal)} 通{model.loading ? ' · 更新中' : ''}</span><div><button className={styles.iconButton} aria-label="上一页" disabled={page <= 1 || model.loading} onClick={() => model.setPage(page - 1)}><Icon name="back"/></button><span>{page} / {pages}</span><button className={styles.iconButton} aria-label="下一页" disabled={page >= pages || model.loading} onClick={() => model.setPage(page + 1)}><Icon name="arrow"/></button></div></div>
   </>;
