@@ -24,6 +24,8 @@ function server(initial: WorkspaceSummary | null = summary(), matchEvidence=fals
     else if (url === '/api/workspaces/safety') data=globalSafety;
     else if (url === '/api/workspaces') data = {workspaces: workspace ? [workspace] : []};
     else if (url === '/api/workspaces/import') {workspace = summary(); data = workspace;}
+    else if (url.endsWith('/report')) data = {report_id: 'a'.repeat(32), filename: '对白-批次清单-aaaaaaaa.csv', workspace_id: workspace!.id, rows: 120000, items: 60000, sources: 120000, size: 1024, revision: 8, sha256: 'c'.repeat(64), scope: 'whole_workspace', schema_version: 1, content_type: 'text/csv; charset=utf-8'};
+    else if (url.startsWith('/api/reports/') && url.endsWith('/discard')) data = {ok: true, report_id: 'a'.repeat(32)};
     else if (url.includes('/items/')) data = {filename: '000123.mp3', item: currentItem, workspace_id: workspace?.id, rows: [{id: 0, speaker: 'AGENT', text: matchEvidence?'先生，您好。':'虚构会议室预约。', start_ms: 0}, {id: 1, speaker: 'USER', text: '请预留一小时。', start_ms: 500}, {id: 2, speaker: 'USER', text: '禁止显示的静音内容', muted: true}], warnings: [], sources: [{name: '0001231.xml', role: 'AGENT', segments: 1}, {name: '0001230.xml', role: 'USER', segments: 2}], voice_choice: {user: matchEvidence?'zh-CN-YunxiNeural':'zh-CN-XiaoyiNeural', reason: matchEvidence?'称呼：先生':'称呼未判定',address:matchEvidence?'male':'undetermined',...(matchEvidence?{evidence_row_id:0}:{})}, muted_count: 1};
     else if (url.endsWith('/selection')) {const selected = body?.mode === 'clear' ? false : body?.selected !== false; const count = selected ? body?.mode === 'all' ? 60000 : 1 : 0; currentItem = {...currentItem, selected}; workspace = {...workspace!, selected: count, ready_selected: count, selection_id: 'selection-two'}; data = {selection_id: 'selection-two', count, hidden_count: 0, selection_query: {q: body?.q || '', filter: body?.filter || 'all', issue: body?.issue || ''}};}
     else if (url.endsWith('/start') || url.endsWith('/resume')) {workspace = {...workspace!, status: 'running', can_edit: false, has_run_plan: true}; data = workspace;}
@@ -260,7 +262,7 @@ it('keeps cleanup confirmation and complete-cache protection behind batch action
   const backend = server(summary({has_unsaved_audio: true, counts: {save_pending: 1}})); render(<App/>);
   await screen.findByRole('checkbox', {name: '选择 000123.mp3'});
   const trigger = screen.getByRole('button', {name: '批次操作'}); trigger.focus();
-  fireEvent.keyDown(trigger, {key: 'ArrowDown'});
+  fireEvent.keyDown(trigger, {key: 'ArrowUp'});
   const finish = await screen.findByRole('menuitem', {name: '结束并清理批次…'});
   expect(finish).toHaveFocus();
   fireEvent.click(finish);
@@ -325,4 +327,27 @@ it('restores a single manual voice from its inherited menu option', async () => 
   fireEvent.click(await screen.findByRole('option', {name: '跟随批次'}));
   await waitFor(() => expect(backend.calls.find(call => call.path.endsWith('/settings'))?.body).toEqual({item_id: 'item-one', customer_voice: null}));
   await waitFor(() => expect(picker).toHaveTextContent('跟随批次'));
+});
+
+it('opens whole-batch CSV export from batch actions and waits for the native save panel', async () => {
+  const backend = server(); let finish!: (value: unknown) => void;
+  const save = vi.fn(() => new Promise(resolve => {finish = resolve;}));
+  (window as NativeHost).pywebview = {api: {save_workspace_report: save}};
+  render(<App/>); await screen.findByRole('checkbox', {name: '选择 000123.mp3'});
+  fireEvent.click(screen.getByRole('button', {name: '批次操作'}));
+  fireEvent.click(screen.getByRole('menuitem', {name: '导出本批次完整清单（CSV）'}));
+  const dialog = screen.getByRole('dialog', {name: '导出批次清单（CSV）'});
+  expect(within(dialog).getByText(/不受当前搜索、筛选或勾选范围影响/)).toBeVisible();
+  expect(backend.calls.some(call => call.path.endsWith('/report'))).toBe(false);
+  fireEvent.click(within(dialog).getByRole('button', {name: '导出并选择保存位置'}));
+  await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith('a'.repeat(32)));
+  expect(within(dialog).getByRole('button', {name: '关闭弹窗'})).toBeDisabled();
+  fireEvent(dialog, new Event('cancel', {cancelable: true}));
+  expect(dialog).toBeVisible();
+  await act(async () => finish({ok: true, save_id: 'd'.repeat(32), report_id: 'a'.repeat(32), name: '清单.csv', path: '/fictional/report.csv', size: 1024, sha256: 'c'.repeat(64)}));
+  await waitFor(() => expect(within(dialog).getByRole('status')).toHaveTextContent('已保存并核验 清单.csv'));
+  expect(backend.calls.find(call => call.path.endsWith('/report'))?.body).toEqual({});
+  expect(backend.calls.find(call => call.path.endsWith('/discard'))?.body).toEqual({});
+  expect(backend.calls.some(call => /\/(start|resume|retry|audition)$/.test(call.path))).toBe(false);
+  expect(screen.getByTestId('consent')).not.toBeChecked();
 });

@@ -4,6 +4,7 @@ import {requestId} from '../services/api';
 import type {Modal} from './AppDialogs';
 import {isWorking, messageOf, type WorkspaceModel} from './useWorkspace';
 import {useApplicationUpdate} from './useApplicationUpdate';
+import {useWorkspaceReport} from './useWorkspaceReport';
 type SafetyHost = Window & {dialogueCloseSafety?: () => object; dialogueUpdateSafety?: () => object; dialogueShowUnsaved?: () => void; dialogueUpdateLock?: (value: boolean) => void; dialogueCheckForUpdates?: () => void};
 const defaultSettings: SoundSettings = {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', USER: 'zh-CN-XiaoyiNeural'}, rate: 1, pause_ms: 250, auto_voice: true, manual_user_voice: false};
 export function useWorkbench(model: WorkspaceModel) {
@@ -27,6 +28,7 @@ export function useWorkbench(model: WorkspaceModel) {
   const busy = !!model.pending || updateLocked || auditionRunning;
   const running = isWorking(workspace);
   const updates = useApplicationUpdate(model, busy, running);
+  const reports = useWorkspaceReport(model);
   const updateSafetyBusy = !!model.pending && !['准备更新','检查更新'].includes(model.pending);
   const restoredAccess = !!workspace && workspace.input_folder.valid !== false && model.output?.valid !== false;
 
@@ -119,7 +121,7 @@ export function useWorkbench(model: WorkspaceModel) {
   const resumable = !!workspace && ['paused', 'interrupted'].includes(workspace.status);
   const offlineResume = resumable && ['recovery_scan','recovery_settings','recovery_checking'].includes(workspace?.phase || '');
   async function startAudition() {await model.perform('创建试听', async () => {setAuditionJob(await model.api.audition(auditionSettings.current, requestId()));});}
-  return {workspace, config, mode, setMode, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, consent, setConsent, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates};
+  return {workspace, config, mode, setMode, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, consent, setConsent, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates, reports};
 }
 
 export type WorkbenchUi = ReturnType<typeof useWorkbench>;

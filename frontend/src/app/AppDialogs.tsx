@@ -6,9 +6,11 @@ import {Icon} from './Icon';
 import {AudioPlayer} from './AudioPlayer';
 import {ApplicationSettings} from './ApplicationSettings';
 import type {ApplicationUpdate} from './useApplicationUpdate';
+import type {WorkspaceReportController} from './useWorkspaceReport';
+import {ReportContent} from './ReportContent';
 import styles from './App.module.css';
-export type Modal = 'settings' | 'match' | 'names' | 'sources' | 'finish' | 'audition';
-interface Props {model: WorkspaceModel; modal: Modal; onClose: () => void; theme: 'light' | 'dark'; changeTheme: () => Promise<void>; onPauseExit: () => Promise<void>; auditionJob: JobSnapshot | null; auditionRunning: boolean; busy: boolean; running: boolean; onStartAudition: () => Promise<void>; updates: ApplicationUpdate}
+export type Modal = 'settings' | 'match' | 'names' | 'sources' | 'finish' | 'audition' | 'report' | 'report-cleanup';
+interface Props {model: WorkspaceModel; modal: Modal; onClose: () => void; theme: 'light' | 'dark'; changeTheme: () => Promise<void>; onPauseExit: () => Promise<void>; auditionJob: JobSnapshot | null; auditionRunning: boolean; busy: boolean; running: boolean; onStartAudition: () => Promise<void>; updates: ApplicationUpdate; reports: WorkspaceReportController}
 function FinishContent({props}: {props: Props}) {
   const {model,onClose,busy,running}=props;
   const workspace=model.workspace;
@@ -26,10 +28,12 @@ function DialogContent({props}: {props: Props}) {
     case 'finish': return <FinishContent props={props}/>;
     case 'audition': return <AuditionContent props={props}/>;
     case 'sources': return <SourcesContent model={props.model}/>;
+    case 'report': return <ReportContent reports={props.reports} workspaceId={props.model.workspace?.id}/>;
+    case 'report-cleanup': return <ReportContent reports={props.reports} cleanupOnly/>;
     case 'match': return <><p>只根据客服对客户的明确“先生／女士”称呼匹配客户声音。无法判断或称呼冲突时，保留批次设置。</p><p>逐通手动选择优先。表格始终显示最终生效的声音。</p></>;
     case 'names': return <><p>先按 XML 内完全一致的通话标识和角色配对，再校验两份文件的数字前缀及末位 0／1。角色以 XML 内容为准。</p><code className={styles.example}>202610270080.xml<br/>＋ 202610270081.xml<br/>→ 20261027008.mp3</code><p>保留前导零。已有文件不覆盖、不自动编号；只有核验一致的结果才跳过。</p></>;
   }
 }
 export function AppDialogs(props: Props) {
-  return <Dialog title={{settings:'应用设置',match:'称呼匹配',names:'固定文件名',sources:'源文件',finish:'结束任务并清理记录',audition:'试听声音'}[props.modal]} compact={props.modal === 'settings'} onClose={props.onClose}><DialogContent props={props}/></Dialog>;
+  return <Dialog title={{settings:'应用设置',match:'称呼匹配',names:'固定文件名',sources:'源文件',finish:'结束任务并清理记录',audition:'试听声音',report:'导出批次清单（CSV）','report-cleanup':'取消临时 CSV 清单'}[props.modal]} compact={props.modal === 'settings' || props.modal.startsWith('report')} closeDisabled={props.modal.startsWith('report') && props.reports.busy} onClose={props.onClose}><DialogContent props={props}/></Dialog>;
 }

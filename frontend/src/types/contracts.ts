@@ -19,6 +19,8 @@ export interface BatchSnapshot {id: string; status: JobStatus | 'partial'; compl
 export interface Folder {folder_id: string; path: string; valid?: boolean}
 export interface Preferences {ok: boolean; input_folder?: Folder | null; output_folder?: Folder | null; voices?: Partial<Record<Role, string>>; rate?: number; pause_ms?: number; theme?: 'light' | 'dark'; auto_voice?: boolean; manual_user_voice?: boolean}
 export interface SaveReceipt {ok: true; save_id: string; name: string; path: string; resource_path?: string; fingerprint?: string; warning?: string}
+export interface WorkspaceReport {report_id: string; filename: string; rows: number; size: number; revision: number; workspace_id: string; items: number; sources: number; sha256: string; scope: 'whole_workspace'; schema_version: 1; content_type: string}
+export interface ReportSaveReceipt {ok: true; save_id: string; report_id: string; name: string; path: string; size: number; sha256: string}
 export interface NativeFailure {ok?: false; cancelled?: boolean; error?: string}
 export type UpdateResult = {state: 'latest' | 'available'; current_version: string; latest_version: string; source?: 'gitee' | 'github'} | {state: 'waiting_for_exit' | 'cancelled' | 'error'; message?: string};
 export interface Safety {busy: boolean; unsaved: boolean}

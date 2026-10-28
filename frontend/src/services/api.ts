@@ -1,4 +1,4 @@
-import type {BatchPayload, BatchPreview, BatchSnapshot, Config, JobSnapshot, NextIssue, PairPayload, Preview, SelectionResult, SelectionWrite, SoundSettings, VoiceId, WorkspaceDetail, WorkspaceIssue, WorkspacePage, WorkspaceQuery, WorkspaceSafety, WorkspaceSnapshot, WorkspaceSummary} from '../types/contracts';
+import type {BatchPayload, BatchPreview, BatchSnapshot, Config, JobSnapshot, NextIssue, PairPayload, Preview, SelectionResult, SelectionWrite, SoundSettings, VoiceId, WorkspaceDetail, WorkspaceIssue, WorkspacePage, WorkspaceQuery, WorkspaceReport, WorkspaceSafety, WorkspaceSnapshot, WorkspaceSummary} from '../types/contracts';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number | null, readonly outcome: 'failed' | 'unknown' = 'failed') {super(message);}
@@ -70,6 +70,9 @@ export class ApiClient {
   retryWorkspace(id: string, kind: 'synthesis' | 'save') {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/retry', kind === 'save' ? {kind} : {kind, consent: true});}
   cancelWorkspaceScan(id: string) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/cancel-scan', {});}
   finishWorkspace(id: string, discardUnsaved = false) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/finish', {discard_unsaved: discardUnsaved});}
+  createWorkspaceReport(id: string) {return this.request<WorkspaceReport>(this.workspacePath(id) + '/report', {});}
+  discardWorkspaceReport(id: string) {return this.request<{ok: true; report_id: string}>('/api/reports/' + this.id(id) + '/discard', {});}
+  cancelPendingReports() {return this.request<{ok: true; cancelled: number}>('/api/reports/cancel-pending', {});}
   setWorkspaceFolders(id: string, folders: {input_folder_id?: string; output_folder_id?: string}) {return this.request<WorkspaceSummary>(this.workspacePath(id) + '/folders', folders);}
   workspaceAudio(id: string, itemId: string) {return this.workspacePath(id) + '/items/' + this.id(itemId) + '/audio';}
   audition(settings: SoundSettings, requestId: string) {return this.request<JobSnapshot>('/api/audition', {...settings, consent: true, request_id: requestId});}

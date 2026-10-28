@@ -40,7 +40,7 @@ export function App() {
     <div className={styles.desktopSettings}>{settingsOpen && !narrowOpen && settingsPanel}</div>
     {narrowOpen && <SettingsDrawer onClose={() => {setNarrowOpen(false); settingsTrigger.current?.focus();}}><SettingsPanel auditionBusy={auditionRunning} model={model} scope={scope} setScope={setScope} onClose={() => setNarrowOpen(false)} onHelp={kind => {setNarrowOpen(false); setModal(kind);}} onAudition={settings => {setNarrowOpen(false); auditionSettings.current = settings; setAuditionJob(null); setModal('audition');}}/></SettingsDrawer>}
 
-    {modal && <AppDialogs key={modal} model={model} modal={modal} onClose={() => setModal(null)} theme={theme} changeTheme={changeTheme} onPauseExit={pauseAndExit} auditionJob={auditionJob} auditionRunning={auditionRunning} busy={busy} running={running} onStartAudition={startAudition} updates={ui.updates}/>}
+    {modal && <AppDialogs key={modal} model={model} modal={modal} onClose={() => setModal(null)} theme={theme} changeTheme={changeTheme} onPauseExit={pauseAndExit} auditionJob={auditionJob} auditionRunning={auditionRunning} busy={busy} running={running} onStartAudition={startAudition} updates={ui.updates} reports={ui.reports}/>}
 
   </div>;
 }
