@@ -9,7 +9,6 @@ const defaultSettings: SoundSettings = {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', 
 export function useWorkbench(model: WorkspaceModel) {
   const {workspace, config} = model;
   const [mode, setMode] = useState<'overview' | 'review'>('overview');
-  const [section, setSection] = useState<'batch' | 'tasks' | 'results'>('batch');
   const [scope, setScope] = useState<'batch' | 'call'>('batch');
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [narrowOpen, setNarrowOpen] = useState(false);
@@ -48,7 +47,7 @@ export function useWorkbench(model: WorkspaceModel) {
     // workspace caches separately; unknown task/save state still blocks close.
     host.dialogueCloseSafety = () => ({busy: busy || running || (model.safety?.busy ?? true), pending: busy || (model.safety?.pending ?? true), running: running || auditionRunning || (model.safety?.busy ?? true), saving: model.safety?.saving ?? true, unsaved: false, persistent_workspace: true});
     host.dialogueUpdateSafety = () => ({busy: updateSafetyBusy || running || auditionRunning || (model.safety?.busy ?? true) || (model.safety?.pending ?? true), unsaved: model.safety?.unsaved ?? true, saving: model.safety?.saving ?? true, persistent_workspace: true});
-    host.dialogueShowUnsaved = () => {setSection('results'); model.setFilter('error'); setMode('overview');};
+    host.dialogueShowUnsaved = () => {model.setFilter('error'); setMode('overview');};
     host.dialogueUpdateLock = setUpdateLocked;
     return () => {host.dialogueCloseSafety = originals.close; host.dialogueUpdateSafety = originals.update; host.dialogueShowUnsaved = originals.show; host.dialogueUpdateLock = originals.lock;};
   }, [busy, updateSafetyBusy, running, auditionRunning, workspace?.phase, model.setFilter, model.safety]);
@@ -114,17 +113,13 @@ export function useWorkbench(model: WorkspaceModel) {
     setConsent(false);
   }
   function clearFilters() {setSearch(''); model.setQuery(''); model.setFilter('all');}
-  function resetView() {setConsent(false); setMode('overview'); setSection('batch'); setSearch('');}
+  function resetView() {setConsent(false); setMode('overview'); setSearch('');}
   async function importFolder() {await model.importFolder(); resetView();}
   function review() {setMode('review'); setScope('call');}
-  function navigate(value: typeof section) {
-    setSection(value); setMode('overview');
-    model.setFilter(value === 'tasks' ? 'running' : value === 'results' ? 'saved' : 'all');
-  }
   const resumable = !!workspace && ['paused', 'interrupted'].includes(workspace.status);
   const offlineResume = resumable && ['recovery_scan','recovery_settings','recovery_checking'].includes(workspace?.phase || '');
   async function startAudition() {await model.perform('创建试听', async () => {setAuditionJob(await model.api.audition(auditionSettings.current, requestId()));});}
-  return {workspace, config, mode, setMode, section, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, consent, setConsent, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, navigate, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates};
+  return {workspace, config, mode, setMode, scope, setScope, settingsOpen, setSettingsOpen, modal, setModal, consent, setConsent, theme, search, setSearch, previewOpen, setPreviewOpen, auditionSettings, auditionJob, setAuditionJob, auditionRunning, busy, running, restoredAccess, settingsTrigger, searchRef, narrowOpen, setNarrowOpen, updateLocked, importFolder, resetView, changeTheme, review, startOrResume, pauseAndExit, resumable, startAudition, clearFilters, updates};
 }
 
 export type WorkbenchUi = ReturnType<typeof useWorkbench>;

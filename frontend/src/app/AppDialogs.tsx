@@ -8,7 +8,7 @@ import {ApplicationSettings} from './ApplicationSettings';
 import type {ApplicationUpdate} from './useApplicationUpdate';
 import styles from './App.module.css';
 export type Modal = 'settings' | 'match' | 'names' | 'sources' | 'finish' | 'audition';
-interface Props {model: WorkspaceModel; modal: Modal; onClose: () => void; onModal: (value: Modal) => void; theme: 'light' | 'dark'; changeTheme: () => Promise<void>; onPauseExit: () => Promise<void>; auditionJob: JobSnapshot | null; auditionRunning: boolean; busy: boolean; running: boolean; onStartAudition: () => Promise<void>; updates: ApplicationUpdate}
+interface Props {model: WorkspaceModel; modal: Modal; onClose: () => void; theme: 'light' | 'dark'; changeTheme: () => Promise<void>; onPauseExit: () => Promise<void>; auditionJob: JobSnapshot | null; auditionRunning: boolean; busy: boolean; running: boolean; onStartAudition: () => Promise<void>; updates: ApplicationUpdate}
 function FinishContent({props}: {props: Props}) {
   const {model,onClose,busy,running}=props;
   const workspace=model.workspace;
@@ -22,7 +22,7 @@ function AuditionContent({props}: {props: Props}) {
 function SourcesContent({model}: {model: WorkspaceModel}) {return <>{model.detail?.sources?.length ? <ul className={styles.sources}>{model.detail.sources.map(source => <li key={source.role + source.name}><span className={styles.role}>{source.role === 'AGENT' ? '客服' : source.role === 'USER' ? '客户' : '未知/无效'}</span><span>{source.name}</span><small>{source.segments} 段</small></li>)}</ul> : <p>此通对话尚无可读取的源文件信息。</p>}<p>角色和文件名来自实际解析，不依据末位猜测角色。</p></>;}
 function DialogContent({props}: {props: Props}) {
   switch(props.modal) {
-    case 'settings': return <ApplicationSettings model={props.model} theme={props.theme} changeTheme={props.changeTheme} onPauseExit={props.onPauseExit} onFinish={() => props.onModal('finish')} onClose={props.onClose} busy={props.busy} running={props.running} updates={props.updates}/>;
+    case 'settings': return <ApplicationSettings model={props.model} theme={props.theme} changeTheme={props.changeTheme} onPauseExit={props.onPauseExit} onClose={props.onClose} busy={props.busy} running={props.running} updates={props.updates}/>;
     case 'finish': return <FinishContent props={props}/>;
     case 'audition': return <AuditionContent props={props}/>;
     case 'sources': return <SourcesContent model={props.model}/>;

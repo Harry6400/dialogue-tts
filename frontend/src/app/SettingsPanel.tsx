@@ -25,18 +25,18 @@ function soundContext(props: Props) {
   return {model,workspace,settings,current,effectiveCustomer,disabled,auditionDisabled,auditionSettings,update,override,props};
 }
 type Context=ReturnType<typeof soundContext>;
-function VoicePicker({ctx,id,label,value,onChange,inherited=false,disabled=false}:{ctx:Context;id:string;label:string;value?:string;onChange:(value:string)=>void;inherited?:boolean;disabled?:boolean}) {
-  return <VoiceSelect id={id} label={label} value={value} voices={ctx.model.config?.voices||[]} disabled={ctx.disabled||disabled||!ctx.workspace} inherited={inherited} onChange={onChange}/>;
+function VoicePicker({ctx,id,label,value,onChange,inherited=false,bulk=false,disabled=false}:{ctx:Context;id:string;label:string;value?:string;onChange:(value:string)=>void;inherited?:boolean;bulk?:boolean;disabled?:boolean}) {
+  return <VoiceSelect id={id} label={label} value={value} voices={ctx.model.config?.voices||[]} disabled={ctx.disabled||disabled||!ctx.workspace} inherited={inherited} bulk={bulk} onChange={onChange}/>;
 }
 
 function AuditionButton({ctx,label}:{ctx:Context;label:string}) {
   return <button className={styles.auditionButton} aria-label={label} disabled={ctx.auditionDisabled} onClick={()=>ctx.auditionSettings&&ctx.props.onAudition(ctx.auditionSettings)}><Icon name="play"/><span>试听</span></button>;
 }
 function CallSettings({ctx}:{ctx:Context}) {
-  const {model,current,settings,disabled,effectiveCustomer,override,props}=ctx;
+  const {model,current,settings,effectiveCustomer,override,props}=ctx;
   const manual=current?.voice_source==='手动选择';
   return <>
-    <div className={styles.settingGroup}><span className={styles.scopeName}>{itemTitle(current)}</span><div className={styles.readonlyField}><span>客服</span><strong>{shortVoiceName(model.config?.voices.find(voice=>voice.id===settings?.voices.AGENT)?.label)}</strong></div><label htmlFor="call-voice" className={styles.fieldLabel}>客户声音</label><div className={styles.voiceInput}><VoicePicker ctx={ctx} id="call-voice" label="当前通话客户声音" value={manual?current?.customer_voice:''} onChange={value=>void override(value)} inherited disabled={current?.status!=='ready'}/><AuditionButton ctx={ctx} label="试听当前通话的有效声音"/></div>{current?.customer_voice&&<p className={styles.resolved}>{shortVoiceName(model.config?.voices.find(voice=>voice.id===effectiveCustomer)?.label)} · {voiceSource(model.detail?.voice_choice?.reason||current.voice_source||'default')}</p>}<button className={styles.textButton} disabled={disabled||current?.status!=='ready'} onClick={()=>void override('')}>恢复跟随批次</button></div>
+    <div className={styles.settingGroup}><span className={styles.scopeName}>{itemTitle(current)}</span><div className={styles.readonlyField}><span>客服</span><strong>{shortVoiceName(model.config?.voices.find(voice=>voice.id===settings?.voices.AGENT)?.label)}</strong></div><label htmlFor="call-voice" className={styles.fieldLabel}>客户声音</label><div className={styles.voiceInput}><VoicePicker ctx={ctx} id="call-voice" label="当前通话客户声音" value={manual?current?.customer_voice:''} onChange={value=>void override(value)} inherited disabled={current?.status!=='ready'}/><AuditionButton ctx={ctx} label="试听当前通话的有效声音"/></div>{current?.customer_voice&&<p className={styles.resolved}>{shortVoiceName(model.config?.voices.find(voice=>voice.id===effectiveCustomer)?.label)} · {voiceSource(model.detail?.voice_choice?.reason||current.voice_source||'default')}</p>}</div>
     <div className={styles.settingGroup}><div className={styles.readonlyField}><span>语速</span><strong>{(settings?.rate||1).toFixed(2)}×</strong></div><div className={styles.readonlyField}><span>段间停顿</span><strong>{settings?.pause_ms??250} ms</strong></div><button className={styles.textButton} onClick={()=>props.setScope('batch')}>调整批次设置 <Icon name="arrow"/></button></div>
   </>;
 }
@@ -52,9 +52,9 @@ function OutputSettings({ctx}:{ctx:Context}) {
   return <div className={styles.settingGroup}><span className={styles.fieldLabel}>批次输出目录</span><button data-testid="output-folder" className={styles.folderButton} disabled={!!model.pending||isWorking(workspace)} onClick={()=>void model.chooseOutput()}><Icon name="folder"/><span title={model.output?.path}>{shortPath(model.output?.path)}</span><span className={styles.folderAction}>更换</span></button><p className={styles.fieldHint}>整个批次均在每通生成后自动保存到此处。</p><div className={styles.metaAction}><span>文件名按 XML 编号</span><button className={styles.infoButton} aria-label="固定命名规则" onClick={()=>props.onHelp('names')}><Icon name="info"/></button></div>{model.output&&<button className={styles.textButton} onClick={()=>void model.perform('打开结果文件夹',async()=>{if(model.native.current)model.nativeValue(await model.native.current.call('reveal_output',{folder_id:model.output!.folder_id}));})}>打开文件夹 <Icon name="arrow"/></button>}</div>;
 }
 function SelectionSettings({ctx}:{ctx:Context}) {
-  const {workspace,disabled,override}=ctx;
+  const {workspace,override}=ctx;
   if (!workspace?.selected) return null;
-  return <div className={styles.settingGroup}><label className={styles.fieldLabel} htmlFor="selected-voice">所选 {workspace.selected.toLocaleString('zh-CN')} 通客户声音</label><VoicePicker ctx={ctx} id="selected-voice" label="所选通话客户声音" value="" onChange={value=>void override(value,true)} inherited/><button className={styles.textButton} disabled={disabled} onClick={()=>void override('',true)}>所选通话恢复跟随批次</button><p className={styles.quiet}>应用于所选通话，优先于称呼匹配。</p></div>;
+  return <div className={styles.settingGroup}><label className={styles.fieldLabel} htmlFor="selected-voice">所选 {workspace.selected.toLocaleString('zh-CN')} 通客户声音</label><VoicePicker ctx={ctx} id="selected-voice" label="所选通话客户声音" onChange={value=>void override(value,true)} inherited bulk/><p className={styles.quiet}>统一选择声音，或在菜单中恢复跟随批次。</p></div>;
 }
 export function SettingsPanel(props:Props) {
   const ctx=soundContext(props);

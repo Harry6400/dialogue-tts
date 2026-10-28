@@ -9,9 +9,9 @@ const settings = {voices: {AGENT: 'zh-CN-XiaoxiaoNeural', USER: 'zh-CN-XiaoyiNeu
 const item: WorkspaceItem = {id: 'item-one', filename: '000123.mp3', status: 'ready', selected: false, customer_voice: 'zh-CN-XiaoyiNeural', voice_source: '称呼未判定'};
 function summary(patch: Partial<WorkspaceSummary> = {}): WorkspaceSummary {return {id: 'workspace-one', status: 'ready', phase: 'ready', revision: 1, discovered: 120000, scanned: 120000, total: 60000, ready: 60000, error: 0, saved: 0, selected: 0, processed: 0, input_folder: {folder_id: 'input-grant', path: '/fictional/input', valid: true}, output_folder: {folder_id: 'output-grant', path: '/fictional/output', valid: true}, settings, selection_id: 'selection-one', can_edit: true, has_run_plan: false, ...patch};}
 
-function server(initial: WorkspaceSummary | null = summary(), matchEvidence=false) {
+function server(initial: WorkspaceSummary | null = summary(), matchEvidence=false, initialItem: Partial<WorkspaceItem> = {}) {
   let workspace = initial;
-  let currentItem = {...item};
+  let currentItem = {...item, ...initialItem};
   let globalSafety={busy:false,unsaved:false,saving:false,pending:false};
   const calls: {path: string; body: Record<string, unknown> | undefined}[] = [];
   const transport = vi.fn<typeof fetch>(async (path, options) => {
@@ -27,6 +27,10 @@ function server(initial: WorkspaceSummary | null = summary(), matchEvidence=fals
     else if (url.includes('/items/')) data = {filename: '000123.mp3', item: currentItem, workspace_id: workspace?.id, rows: [{id: 0, speaker: 'AGENT', text: matchEvidence?'先生，您好。':'虚构会议室预约。', start_ms: 0}, {id: 1, speaker: 'USER', text: '请预留一小时。', start_ms: 500}, {id: 2, speaker: 'USER', text: '禁止显示的静音内容', muted: true}], warnings: [], sources: [{name: '0001231.xml', role: 'AGENT', segments: 1}, {name: '0001230.xml', role: 'USER', segments: 2}], voice_choice: {user: matchEvidence?'zh-CN-YunxiNeural':'zh-CN-XiaoyiNeural', reason: matchEvidence?'称呼：先生':'称呼未判定',address:matchEvidence?'male':'undetermined',...(matchEvidence?{evidence_row_id:0}:{})}, muted_count: 1};
     else if (url.endsWith('/selection')) {const selected = body?.mode === 'clear' ? false : body?.selected !== false; currentItem = {...currentItem, selected}; workspace = {...workspace!, selected: selected ? body?.mode === 'all' ? 60000 : 1 : 0, selection_id: 'selection-two'}; data = {selection_id: 'selection-two', count: workspace.selected, hidden_count: 0};}
     else if (url.endsWith('/start') || url.endsWith('/resume')) {workspace = {...workspace!, status: 'running', can_edit: false, has_run_plan: true}; data = workspace;}
+    else if (url.endsWith('/settings')) {
+      if (body && 'customer_voice' in body) currentItem = {...currentItem, customer_voice: body.customer_voice as WorkspaceItem['customer_voice'] || 'zh-CN-XiaoyiNeural', voice_source: body.customer_voice ? '手动选择' : '称呼未判定'};
+      workspace = {...workspace!, revision: workspace!.revision + 1}; data = workspace;
+    }
     else if (url.endsWith('/snapshot')) data = {...workspace, items: [], reset: false};
     else data = {...workspace, items: url.includes('q=notfound')?[]:[currentItem], matched_total: url.includes('q=notfound')?0:60000, page: 1, page_size: 100, selection_hidden_count: 0};
     return new Response(JSON.stringify(data), {headers: {'Content-Type': 'application/json'}});
@@ -223,4 +227,102 @@ it('closes the batch menu with Escape without leaving transcript review',async()
   fireEvent.keyDown(menu,{key:'Escape'});
   await waitFor(()=>expect(screen.queryByRole('listbox')).not.toBeInTheDocument());
   expect(screen.getByRole('button',{name:'正文核对'})).toHaveAttribute('aria-pressed','true');
+});
+
+it('uses batch filters as the single list scope while preserving selection and review', async () => {
+  const backend = server(); render(<App/>);
+  await screen.findByRole('checkbox', {name: '选择 000123.mp3'});
+  expect(screen.getAllByRole('button', {name: '新建批次'})).toHaveLength(1);
+  expect(screen.queryByRole('button', {name: '添加批次'})).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', {name: '生成进度'})).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', {name: '已保存结果'})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('checkbox', {name: '选择 000123.mp3'}));
+  await waitFor(() => expect(screen.getByTestId('generate')).toHaveTextContent('生成 1 通'));
+  fireEvent.click(screen.getByRole('button', {name: /^已保存/}));
+  await waitFor(() => expect(backend.calls.filter(call => call.path.includes('?q=')).at(-1)?.path).toContain('filter=saved'));
+  expect(screen.getByRole('heading', {name: '当前批次'})).toBeVisible();
+  fireEvent.click(screen.getByRole('button', {name: /^进行中/}));
+  expect(screen.getByTestId('task-progress')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', {name: /^全部/}));
+  expect(screen.queryByTestId('task-progress')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', {name: '正文核对'}));
+  const active = within(screen.getByRole('region', {name: '完整核对'})).getByRole('heading', {name: '000123.mp3'});
+  expect(active).toBeVisible();
+  fireEvent.click(screen.getByRole('button', {name: /^待生成/}));
+  expect(screen.getByRole('button', {name: '正文核对'})).toHaveAttribute('aria-pressed', 'true');
+  await waitFor(() => expect(screen.getByRole('checkbox', {name: '选择 000123.mp3'})).toBeChecked());
+  fireEvent.click(screen.getByRole('button', {name: '列表总览'}));
+  expect(screen.getByRole('button', {name: /^待生成/})).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByRole('button', {name: '000123.mp3'})).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('keeps cleanup confirmation and complete-cache protection behind batch actions', async () => {
+  const backend = server(summary({has_unsaved_audio: true, counts: {save_pending: 1}})); render(<App/>);
+  await screen.findByRole('checkbox', {name: '选择 000123.mp3'});
+  const trigger = screen.getByRole('button', {name: '批次操作'}); trigger.focus();
+  fireEvent.keyDown(trigger, {key: 'ArrowDown'});
+  const finish = await screen.findByRole('menuitem', {name: '结束并清理批次…'});
+  expect(finish).toHaveFocus();
+  fireEvent.click(finish);
+  const confirmation = screen.getByRole('dialog', {name: '结束任务并清理记录'});
+  const submit = within(confirmation).getByRole('button', {name: '结束并清理记录'});
+  expect(submit).toBeDisabled();
+  expect(backend.calls.some(call => call.path.endsWith('/finish'))).toBe(false);
+  fireEvent.click(within(confirmation).getByRole('button', {name: '取消'}));
+  await waitFor(() => expect(trigger).toHaveFocus());
+  fireEvent.click(trigger); fireEvent.click(screen.getByRole('menuitem', {name: '结束并清理批次…'}));
+  fireEvent.click(screen.getByRole('checkbox', {name: '我确认放弃尚未保存的音频缓存'}));
+  fireEvent.click(screen.getByRole('button', {name: '结束并清理记录'}));
+  await waitFor(() => expect(backend.calls.filter(call => call.path.endsWith('/finish'))).toHaveLength(1));
+  expect(backend.calls.find(call => call.path.endsWith('/finish'))?.body).toEqual({discard_unsaved: true});
+});
+
+it('disables batch cleanup during generation and closes its menu without leaving review', async () => {
+  server(summary({status: 'running', can_edit: false, has_run_plan: true})); render(<App/>);
+  await screen.findByTestId('pause');
+  await screen.findByRole('checkbox', {name: '选择 000123.mp3'});
+  expect(screen.getByRole('button', {name: '新建批次'})).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', {name: '正文核对'}));
+  const trigger = screen.getByRole('button', {name: '批次操作'});
+  fireEvent.click(trigger);
+  expect(screen.getByRole('menuitem', {name: '结束并清理批次…'})).toBeDisabled();
+  fireEvent.keyDown(screen.getByRole('menu', {name: '批次操作'}), {key: 'Escape'});
+  await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());
+  expect(trigger).toHaveFocus();
+  expect(screen.getByRole('button', {name: '正文核对'})).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('applies then restores selected voices through the same selection snapshot repeatedly', async () => {
+  const backend = server(); render(<App/>);
+  fireEvent.click(await screen.findByRole('checkbox', {name: '选择 000123.mp3'}));
+  const picker = await screen.findByRole('combobox', {name: '所选通话客户声音'});
+  await waitFor(() => expect(picker).toBeEnabled());
+  expect(screen.queryByRole('button', {name: '所选通话恢复跟随批次'})).not.toBeInTheDocument();
+  fireEvent.keyDown(picker, {key: 'Enter'});
+  fireEvent.click(await screen.findByRole('option', {name: /晓晓/}));
+  await waitFor(() => expect(backend.calls.filter(call => call.path.endsWith('/settings'))).toHaveLength(1));
+  for (const expected of [2, 3]) {
+    await waitFor(() => expect(picker).toBeEnabled());
+    expect(picker).toHaveTextContent('批量设置声音');
+    fireEvent.keyDown(picker, {key: 'Enter'});
+    fireEvent.click(await screen.findByRole('option', {name: '恢复跟随批次'}));
+    await waitFor(() => expect(backend.calls.filter(call => call.path.endsWith('/settings'))).toHaveLength(expected));
+  }
+  expect(backend.calls.filter(call => call.path.endsWith('/settings')).map(call => call.body)).toEqual([
+    {selection_id: 'selection-two', customer_voice: 'zh-CN-XiaoxiaoNeural'},
+    {selection_id: 'selection-two', customer_voice: null},
+    {selection_id: 'selection-two', customer_voice: null},
+  ]);
+});
+
+it('restores a single manual voice from its inherited menu option', async () => {
+  const backend = server(summary(), false, {voice_source: '手动选择'}); render(<App/>);
+  await screen.findByRole('checkbox', {name: '选择 000123.mp3'});
+  fireEvent.click(screen.getByRole('button', {name: '当前通话'}));
+  const picker = screen.getByRole('combobox', {name: '当前通话客户声音'});
+  expect(screen.queryByRole('button', {name: '恢复跟随批次'})).not.toBeInTheDocument();
+  fireEvent.keyDown(picker, {key: 'Enter'});
+  fireEvent.click(await screen.findByRole('option', {name: '跟随批次'}));
+  await waitFor(() => expect(backend.calls.find(call => call.path.endsWith('/settings'))?.body).toEqual({item_id: 'item-one', customer_voice: null}));
+  await waitFor(() => expect(picker).toHaveTextContent('跟随批次'));
 });

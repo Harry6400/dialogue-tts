@@ -16,7 +16,7 @@ function setup(overrides: {busy?: boolean; running?: boolean; nativeFailure?: st
       return result.value;
     },
   } as unknown as WorkspaceModel;
-  const props = {model, theme: 'light' as const, changeTheme: vi.fn().mockResolvedValue(undefined), onPauseExit: vi.fn().mockResolvedValue(undefined), onFinish: vi.fn(), onClose: vi.fn(), busy: overrides.busy ?? false, running: overrides.running ?? false};
+  const props = {model, theme: 'light' as const, changeTheme: vi.fn().mockResolvedValue(undefined), onPauseExit: vi.fn().mockResolvedValue(undefined), onClose: vi.fn(), busy: overrides.busy ?? false, running: overrides.running ?? false};
   function Subject() {
     const updates = useApplicationUpdate(model, props.busy, props.running);
     return <ApplicationSettings {...props} updates={updates}/>;
@@ -34,12 +34,9 @@ it('makes the selected appearance explicit and changes only a different choice',
   expect(changeTheme).toHaveBeenCalledOnce();
 });
 
-it('separates preserving progress from the destructive confirmation entry', () => {
-  const {onFinish, onPauseExit, onClose, call} = setup();
-  expect(screen.getByText('清理本机任务记录，保留已保存的 MP3')).toBeVisible();
-  fireEvent.click(screen.getByRole('button', {name: '结束并清理…'}));
-  expect(onFinish).toHaveBeenCalledOnce();
-  expect(onPauseExit).not.toHaveBeenCalled();
+it('preserves progress from application settings without duplicating batch cleanup', () => {
+  const {onPauseExit, onClose, call} = setup();
+  expect(screen.queryByRole('button', {name: '结束并清理…'})).not.toBeInTheDocument();
   expect(call).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', {name: '保存并退出'}));
   expect(onClose).toHaveBeenCalledOnce();
@@ -109,7 +106,7 @@ it('explains the desktop requirement when opened in an ordinary browser', async 
 it('retains running-task restrictions while preserving the exit request', () => {
   setup({running: true});
   expect(screen.getByRole('button', {name: '检查更新'})).toBeDisabled();
-  expect(screen.getByRole('button', {name: '结束并清理…'})).toBeDisabled();
+  expect(screen.queryByRole('button', {name: '结束并清理…'})).not.toBeInTheDocument();
   expect(screen.getByRole('button', {name: '保存并退出'})).toBeEnabled();
 });
 

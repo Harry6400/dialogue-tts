@@ -1,5 +1,4 @@
 import {Icon} from './Icon';
-import {shortPath} from './format';
 import {messageOf, type WorkspaceModel} from './useWorkspace';
 import {useState} from 'react';
 import type {ApplicationUpdate} from './useApplicationUpdate';
@@ -10,17 +9,23 @@ interface Props {
   theme: 'light' | 'dark';
   changeTheme: () => Promise<void>;
   onPauseExit: () => Promise<void>;
-  onFinish: () => void;
   onClose: () => void;
   busy: boolean;
   running: boolean;
   updates: ApplicationUpdate;
 }
 
-export function ApplicationSettings({model, theme, changeTheme, onPauseExit, onFinish, onClose, busy, running, updates}: Props) {
+function UpdateFeedback({updates, disabled}: {updates: ApplicationUpdate; disabled: boolean}) {
+  const {feedback, pending, availableVersion} = updates;
+  if (feedback.state === 'idle') return null;
+  const isError = feedback.state === 'error';
+  return <div className={`${styles.updateStatus} ${isError ? styles.updateError : ''}`} role={isError ? 'alert' : 'status'}><Icon name={isError ? 'warning' : feedback.state === 'latest' ? 'check' : 'info'}/><span>{feedback.message}</span>{availableVersion && <button className={styles.install} disabled={disabled || pending} onClick={() => void updates.install()}><Icon name="download"/>{feedback.state === 'preparing' ? '正在准备…' : '下载并安装更新'}</button>}</div>;
+}
+
+export function ApplicationSettings({model, theme, changeTheme, onPauseExit, onClose, busy, running, updates}: Props) {
   const {workspace, config} = model;
   const [exitError, setExitError] = useState('');
-  const {feedback, pending, availableVersion} = updates;
+  const {feedback, pending} = updates;
   const versionLabel = config?.app_version ? '当前版本 ' + config.app_version + (config.mac_build_number ? ' · Mac 构建 ' + config.mac_build_number : '') : '版本信息暂不可用';
 
   async function requestClose() {
@@ -45,20 +50,15 @@ export function ApplicationSettings({model, theme, changeTheme, onPauseExit, onF
         <div className={styles.description}><strong>版本更新</strong><p>{versionLabel}</p></div>
         <button className={styles.action} disabled={busy || running || pending} onClick={() => void updates.check()}>{feedback.state === 'checking' ? '正在检查…' : '检查更新'}</button>
       </div>
-      {feedback.state !== 'idle' && <div className={`${styles.updateStatus} ${feedback.state === 'error' ? styles.updateError : ''}`} role={feedback.state === 'error' ? 'alert' : 'status'}><Icon name={feedback.state === 'error' ? 'warning' : feedback.state === 'latest' ? 'check' : 'info'}/><span>{feedback.message}</span>{availableVersion && <button className={styles.install} disabled={busy || running || pending} onClick={() => void updates.install()}><Icon name="download"/>{feedback.state === 'preparing' ? '正在准备…' : '下载并安装更新'}</button>}</div>}
+      <UpdateFeedback updates={updates} disabled={busy || running}/>
     </section>
 
-    {workspace && <section className={`${styles.section} ${styles.taskSection}`} aria-labelledby="application-current-batch">
-      <div className={styles.sectionHeading}><h3 id="application-current-batch">当前批次</h3><span>{shortPath(workspace.input_folder.path)}</span></div>
+    {workspace && <section className={`${styles.section} ${styles.taskSection}`} aria-labelledby="application-exit">
+      <div className={styles.sectionHeading}><h3 id="application-exit">退出应用</h3></div>
       <div className={styles.row}>
         <span className={styles.rowIcon}><Icon name="exit"/></span>
         <div className={styles.description}><strong>保存进度并退出</strong><p>下次打开可恢复，继续生成需再次授权</p></div>
         <button className={styles.action} disabled={busy} onClick={() => {onClose(); void onPauseExit();}}>保存并退出</button>
-      </div>
-      <div className={styles.row}>
-        <span className={styles.rowIcon}><Icon name="file"/></span>
-        <div className={styles.description}><strong>结束当前批次</strong><p>清理本机任务记录，保留已保存的 MP3</p></div>
-        <button className={`${styles.action} ${styles.dangerAction}`} disabled={busy || running} onClick={onFinish}>结束并清理…</button>
       </div>
     </section>}
     {!workspace && config?.can_shutdown && <div className={styles.quit}><button className={styles.action} disabled={busy} onClick={() => void requestClose()}><Icon name="exit"/>退出对白</button></div>}
