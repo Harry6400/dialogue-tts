@@ -36,8 +36,8 @@ class NativeWorkspaceGateTests(unittest.TestCase):
             return state
         return SimpleNamespace(update_lock=lock, update_in_progress=False,
             workspaces=SimpleNamespace(safety=Mock(side_effect=safety)),
-            jobs=SimpleNamespace(lock=threading.RLock(), items={}),
-            batches=SimpleNamespace(lock=threading.RLock(), active=None))
+            jobs=SimpleNamespace(transaction=threading.RLock, has_running=Mock(return_value=False)),
+            batches=SimpleNamespace(transaction=threading.RLock, has_running=Mock(return_value=False)))
 
     def test_windows_updater_checks_global_state_under_update_lock_before_any_helper(self):
         for field in GLOBAL_IDLE:
@@ -95,8 +95,20 @@ class NativeWorkspaceGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             downloads = NativeDownloads('http://127.0.0.1:1', Path(temp) / 'preferences.json')
             downloads._update_server = self.server(GLOBAL_IDLE)
-            downloads._update_server.jobs.items['background'] = {'process': SimpleNamespace(poll=lambda: None)}
+            downloads._update_server.jobs.has_running.return_value=True
             self.assertTrue(downloads._close_snapshot(PAGE_IDLE)['running'])
+
+    def test_missing_service_or_work_pool_protocol_never_looks_idle(self):
+        with tempfile.TemporaryDirectory() as temp:
+            downloads=NativeDownloads('http://127.0.0.1:1',Path(temp)/'preferences.json')
+            self.assertIsNone(downloads._close_snapshot(PAGE_IDLE))
+            downloads._update_server=self.server(GLOBAL_IDLE)
+            downloads._update_server.jobs=SimpleNamespace()
+            self.assertIsNone(downloads._close_snapshot(PAGE_IDLE))
+            downloads._update_server=self.server(GLOBAL_IDLE)
+            downloads._update_server.jobs.has_running.return_value=0
+            self.assertIsNone(downloads._close_snapshot(PAGE_IDLE))
+            downloads._close_folders()
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'Compile the actual Swift global safety merger on macOS')
@@ -121,6 +133,12 @@ assert(mergeNativeCloseSafety(page, nil) == nil)
 assert(mergeNativeCloseSafety(page, ["busy":false]) == nil)
 let malformed = try! JSONSerialization.jsonObject(with: Data("{\"busy\":false,\"saving\":0,\"pending\":false,\"unsaved\":false}".utf8)) as! [String:Any]
 assert(mergeNativeCloseSafety(page, malformed) == nil)
+var legacyCache = idle; legacyCache["legacy_unsaved"] = true
+let legacyMerged = mergeNativeCloseSafety(page, legacyCache)!
+assert(legacyMerged["unsaved"] as? Bool == true)
+assert(legacyMerged["persistent_unsaved"] as? Bool == false)
+legacyCache["legacy_unsaved"] = "unknown"
+assert(mergeNativeCloseSafety(page, legacyCache) == nil)
 print("PASS: global workspace safety and legacy manual protection merged fail-closed")
 '''
         with tempfile.TemporaryDirectory(prefix='dialogue-safety-swift-') as temp:

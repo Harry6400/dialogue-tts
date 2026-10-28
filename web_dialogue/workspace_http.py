@@ -5,9 +5,24 @@ import re
 from .normalize import InputError
 
 
-def _safety(work, reports=None):
+def _safety(work, reports=None, audio_captures=None, jobs=None):
     from .runtime_safety import combined_safety
-    return combined_safety(work, reports)
+    return combined_safety(work, reports, audio_captures, jobs)
+
+
+def acknowledge_saved_source(server,receipt):
+    """Release duplicate legacy source only after its real native save receipt."""
+    match=re.fullmatch(r'/api/jobs/([a-f0-9]{32})/audio',receipt.get('resource_path',''))
+    if not match:return
+    ident=match[1]
+    try:
+        if server.jobs.recovery_context(ident) is not None or not server.jobs.wait_finished(ident,1):return
+        with server.jobs.open_result(ident,recovery=True) as source:
+            if source.filename!=receipt['name'] or source.fingerprint!=receipt['fingerprint'] or source.size!=receipt['size'] or source.sha256!=receipt['sha256']:
+                return
+        server.jobs.release(ident)
+    except (ValueError,OSError,KeyError):
+        pass  # A source not proved redundant remains protected.
 
 
 def _audio(handler,handle,filename,fingerprint,size):
@@ -44,7 +59,7 @@ def get_workspace(handler,path):
     try:
         allowed={'q','filter','issue','page','limit','sort'} if len(parts)==1 and parts!=['safety'] else {'q','issue','after_id','limit'} if len(parts)==2 and parts[1]=='next-issue' else {'revision'} if len(parts)==2 and parts[1]=='snapshot' else set()
         if set(query)-allowed or any(len(values)!=1 for values in parameters.values()):raise InputError('工作区查询参数无效。')
-        if parts==['safety']:result=_safety(work,getattr(handler.server,'reports',None))
+        if parts==['safety']:result=_safety(work,handler.server.reports,handler.server.audio_captures,handler.server.jobs)
         elif not parts:result=work.list()
         elif len(parts)==1:result=work.page(parts[0],q=query.get('q',''),filter=query.get('filter','all'),page=query.get('page',1),limit=query.get('limit',100),sort=query.get('sort','filename'),issue=query.get('issue',''))
         elif len(parts)==2 and parts[1]=='next-issue':result=work.next_issue(parts[0],q=query.get('q',''),issue=query.get('issue',''),after_id=query.get('after_id'),limit=query.get('limit',100))
@@ -65,9 +80,24 @@ def post_workspace(handler,path,payload):
     if path.startswith('/api/native/'):
         if work is None:raise InputError('本机工作区未启用。')
         access=handler.server.native_access
+        if path.startswith('/api/native/audio-captures/'):
+            action=path.rsplit('/',1)[-1]
+            captures=handler.server.audio_captures
+            allowed={'reserve':{'resource_path','filename','fingerprint','size'},'complete':{'capture_id'},'abort':{'capture_id'},'find':{'resource_path'},'pending':set(),'save':{'capture_id','folder_id'},'discard':{'capture_id'}}
+            if action not in allowed or set(payload)-allowed[action]:raise InputError('原生音频缓存参数无效。')
+            if action=='reserve':return captures.reserve(payload)
+            if action in {'complete','abort'}:
+                return captures.complete(payload.get('capture_id')) if action=='complete' else captures.abort(payload.get('capture_id'))
+            if action=='find':return captures.find(payload.get('resource_path'))
+            if action=='pending':return captures.pending()
+            if action=='save':
+                result=captures.save(payload.get('capture_id'),payload.get('folder_id'))
+                acknowledge_saved_source(handler.server,result)
+                return result
+            return captures.discard(payload.get('capture_id'))
         if path=='/api/native/workspaces/safety':
             if payload:raise InputError('安全核验不接受参数。')
-            return _safety(work,getattr(handler.server,'reports',None))
+            return _safety(work,handler.server.reports,handler.server.audio_captures,handler.server.jobs)
         if path=='/api/native/folders':
             if not isinstance(payload.get('path'),str) or payload.get('kind') not in ('input','output'):raise InputError('目录注册参数无效。')
             return access.register(payload.get('path'),payload.get('kind'))
@@ -94,18 +124,24 @@ def post_workspace(handler,path,payload):
             if not isinstance(route,str):raise InputError('输出资源无效。')
             match=re.fullmatch(r'/api/jobs/([a-f0-9]{32})/audio',route)
             if match:
-                snapshot=handler.server.jobs.snapshot(match[1])
-                if snapshot['status']!='done':raise InputError('音频未完成。')
-                source=handler.server.jobs.items[match[1]]['folder']/'dialogue.mp3'
-                return {**access.save_audio(payload.get('folder_id'),source,snapshot['filename'],snapshot['fingerprint']),'resource_path':route}
+                with handler.server.jobs.open_result(match[1]) as source:
+                    receipt=access.save_audio(payload.get('folder_id'),source.local_path,source.filename,source.fingerprint,expected_size=source.size,expected_sha256=source.sha256)
+                if handler.server.jobs.recovery_context(match[1]) is None and handler.server.jobs.wait_finished(match[1],1):
+                    handler.server.jobs.release(match[1])
+                return {**receipt,'resource_path':route}
             match=re.fullmatch(r'/api/batches/([a-f0-9]{32})/audio/([0-9]{3})',route)
             if match:
                 batches=handler.server.batches
-                with batches.lock:
+                with batches.transaction():
                     snapshot=batches.snapshot(match[1])
                     item=next((i for i in snapshot['items'] if i.get('download_url')==route),None)
                     if item is None:raise InputError('音频未完成。')
-                    return {**access.save_audio(payload.get('folder_id'),batches.output(match[1],match[2]),item['filename'],item['fingerprint']),'resource_path':route}
+                    handle,name,size=batches.open_output(match[1],match[2])
+                    with handle:
+                        import hashlib
+                        digest=hashlib.sha256()
+                        for block in iter(lambda:handle.read(65536),b''):digest.update(block)
+                        return {**access.save_audio(payload.get('folder_id'),handle.path,name,item['fingerprint'],expected_size=size,expected_sha256=digest.hexdigest()),'resource_path':route}
             raise InputError('输出资源无效。')
         raise KeyError('原生接口不存在。')
     if work is None:raise InputError('本机工作区未启用。')

@@ -15,20 +15,30 @@ from contextlib import ExitStack
 
 from native_windows_folders import NativeFolderMixin
 from native_windows_updater import NativeUpdaterMixin
+from native_windows_contracts import NativeLocks, ServicePort, WindowPort
 
 
 class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
     """Only app-owned successful saves may be revealed; JS never supplies a path."""
-    def __init__(self, base, storage=None, native_token=None, workspace_access=None):
+    def __init__(self, base, storage=None, native_token=None, workspace_access=None, *, service: ServicePort | None = None, locks: NativeLocks | None = None):
         self._base = base
-        self._window = None
+        self._window: WindowPort | None = None
         self._closing = False
         self._saved = {}
-        self._lock = threading.Lock()
+        native_locks=locks or NativeLocks()
+        self._lock,self._folder_lock,self._update_gate=native_locks.save,native_locks.folders,native_locks.update
+        self._update_server=service
+        self._updater=None
         self._native_token = native_token
         self._workspace_access = workspace_access
         self._owns_workspace_access = False
         self._setup_folders(storage)
+        if service is not None:self._setup_updater(service)
+
+    def _attach_window(self, window: WindowPort):
+        if self._window is not None and self._window is not window:raise ValueError('原生窗口已经绑定')
+        if window is None:raise ValueError('原生窗口尚未就绪')
+        self._window=window
 
     def request_close(self):
         if self._window is None: return {'ok': False}
@@ -38,11 +48,45 @@ class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
     def _close_snapshot(self, page):
         from native_close import merge_close_safety, workspace_safety
         server = self._update_server
-        state = merge_close_safety(page, workspace_safety(server))
-        if state is not None:
-            with server.jobs.lock, server.batches.lock:
-                state['running'] = state['running'] or any(item['process'].poll() is None for item in server.jobs.items.values()) or bool(server.batches.active)
-        return state
+        if server is None:return None
+        try:
+            state = merge_close_safety(page, workspace_safety(server))
+            if state is not None:
+                with server.jobs.transaction(),server.batches.transaction():
+                    job_running,batch_running=server.jobs.has_running(),server.batches.has_running()
+                    if type(job_running) is not bool or type(batch_running) is not bool:return None
+                    state['running']=state['running'] or job_running or batch_running
+            return state
+        except Exception:return None
+
+    def _return_to_unsaved_audio(self):
+        """Run after close-review locks release; only native panels grant paths."""
+        if not self._lock.acquire(False):return {'ok':False,'error':'请先完成当前保存'}
+        try:
+            import webview
+            pending=self._native_workspace_request('/api/native/audio-captures/pending',{})
+            captures=pending.get('captures')
+            if not isinstance(captures,list) or len(captures)>128:raise ValueError('原生音频缓存状态无法确认')
+            if not captures:
+                self._require_window().evaluate_js('window.dialogueShowUnsaved && window.dialogueShowUnsaved()')
+                return {'ok':True}
+            ready=next((item for item in captures if isinstance(item,dict) and item.get('state')=='ready'),None)
+            if ready is None:return {'ok':False,'error':'上次下载未完整完成，不能直接保存；可取消退出后重新生成，或明确放弃临时结果。'}
+            import re
+            capture_id=ready.get('capture_id')
+            if not isinstance(capture_id,str) or not re.fullmatch(r'[a-f0-9]{32}',capture_id):raise ValueError('原生音频标识无效')
+            chosen=self._require_window().create_file_dialog(webview.FileDialog.FOLDER)
+            if not chosen:return {'cancelled':True}
+            folder=self._native_workspace_request('/api/native/folders',{'kind':'output','path':str(Path(chosen[0]).absolute())})
+            result=self._native_workspace_request('/api/native/audio-captures/save',{'capture_id':capture_id,'folder_id':folder['folder_id']})
+            if result.get('ok') is not True or result.get('state')!='saved':raise ValueError('未收到真实音频保存回执')
+            self._saved[result['save_id']]=Path(result['path'])
+            try:self._require_window().evaluate_js('window.dialogueNativeSaved && window.dialogueNativeSaved('+json.dumps(result,ensure_ascii=True)+')')
+            except Exception:pass  # The real receipt remains authoritative.
+            return result
+        except (OSError,ValueError,TypeError,KeyError,IndexError):
+            return {'ok':False,'error':'保存未完成，完整音频仍保留；可再次退出并选择“返回保存”重试。'}
+        finally:self._lock.release()
 
     def save_workspace_report(self, report_id):
         """A CSV destination comes only from this native save panel."""
@@ -59,7 +103,7 @@ class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
             name = info.get('filename')
             if not isinstance(name, str) or Path(name).name != name or '/' in name or '\\' in name or '\x00' in name or not name.lower().endswith('.csv'):
                 raise ValueError('清单名称无效')
-            chosen = self._window.create_file_dialog(webview.FileDialog.SAVE, save_filename=name, file_types=('CSV (*.csv)',))
+            chosen = self._require_window().create_file_dialog(webview.FileDialog.SAVE, save_filename=name, file_types=('CSV (*.csv)',))
             if not chosen:
                 return {'cancelled': True}
             value = chosen if isinstance(chosen, str) else chosen[0]
@@ -154,7 +198,7 @@ class NativeDownloads(NativeFolderMixin, NativeUpdaterMixin):
 
 def self_test(report_path, live=False):
     """CI packaging smoke test. Does not open a browser or use private input."""
-    from web_dialogue.app import make_server
+    from web_dialogue.app import make_server, close_resources
     server = make_server(0)
     server.can_shutdown = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -180,8 +224,7 @@ def self_test(report_path, live=False):
             cancelled_job = post("/api/jobs", data)
             time.sleep(0.3)
             cancelled = post("/api/jobs/" + cancelled_job["id"] + "/cancel", {})
-            cancelled_process = server.jobs.items[cancelled_job["id"]]["process"]
-            report["cancelled_worker"] = cancelled["status"] == "cancelled" and cancelled_process.poll() is not None
+            report["cancelled_worker"] = cancelled["status"] == "cancelled" and not server.jobs.has_running()
             if not report["cancelled_worker"]:
                 raise RuntimeError("Worker process tree cancellation was not confirmed")
             job = post("/api/jobs", data)
@@ -232,7 +275,9 @@ def self_test(report_path, live=False):
     finally:
         server.shutdown()
         server.server_close()
-        server.jobs.close()
+        cleanup=close_resources(server)
+        if not cleanup['ok']:
+            report['passed']=False;report['cleanup_errors']=cleanup['errors']
     Path(report_path).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return 0 if report["passed"] else 1
 
@@ -274,10 +319,10 @@ def run_window(gui_report=None):
     import webview
     from web_dialogue.install_lock import InstallationLease
     installation_lease=InstallationLease(sys.executable).acquire() if getattr(sys,'frozen',False) else None
-    from web_dialogue.app import make_server
+    from web_dialogue.app import make_server, close_resources
     from web_dialogue.verification_profile import verification_root
     import secrets
-    gui_temp = tempfile.TemporaryDirectory(prefix='dialogue-gui-ci-') if gui_report else None
+    gui_temp = tempfile.TemporaryDirectory(prefix='dialogue-gui-ci-', delete=False) if gui_report else None
     state_dir = Path(gui_temp.name) if gui_temp else verification_root() or Path(os.environ.get('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))) / 'DialogueTTS'
     native_token = secrets.token_hex(32)
     server = make_server(0, state_dir=state_dir, native_token=native_token)
@@ -299,7 +344,7 @@ def run_window(gui_report=None):
         grant = server.native_access.register(fixture, 'input')
         server.workspaces.import_folder(grant['folder_id'])
     window = webview.create_window('对白', url, js_api=downloads, width=1180, height=840, min_size=(760,620), background_color='#F5F7F8')
-    downloads._window = window
+    downloads._attach_window(window)
     downloads._setup_updater(server)
     def acknowledge_update():
         if len(sys.argv)==4 and sys.argv[1]=="--update-receipt":
@@ -309,7 +354,7 @@ def run_window(gui_report=None):
     report = {'frozen':bool(getattr(sys,'frozen',False)), 'platform':sys.platform, 'passed':False}
     checking_close = threading.Event()
     def review_close():
-        save_guard = False; folder_guard = False
+        save_guard = False; folder_guard = False; return_to_save = False
         try:
             with server.update_lock:
                 save_guard = downloads._lock.acquire(False)
@@ -333,22 +378,33 @@ def run_window(gui_report=None):
                     return 'cancel'
                 decision = close_decision(state, saving=not save_guard or not folder_guard, prompt=prompt)
                 if decision == 'save':
-                    window.evaluate_js("window.dialogueShowUnsaved && window.dialogueShowUnsaved()")
+                    return_to_save = True
                 if decision != 'exit': return
                 # A running workspace can enter publication while its confirmation
                 # is displayed. Recheck immediately before destroying the window.
                 latest = workspace_safety(server)
                 if latest is None or latest['saving'] or latest['pending']:
                     prompt('unknown' if latest is None else 'saving'); return
+                if latest['legacy_unsaved']:
+                    if not isinstance(state,dict) or state.get('unsaved') is not True:
+                        prompt('unknown');return
+                    try:server.audio_captures.discard()
+                    except Exception:prompt('unknown');return
                 downloads._closing = True
                 window.destroy()
         finally:
             if folder_guard: downloads._folder_lock.release()
             if save_guard: downloads._lock.release()
-            checking_close.clear()
+            try:
+                if return_to_save:
+                    result=downloads._return_to_unsaved_audio()
+                    if result.get('ok') is False:
+                        import ctypes
+                        ctypes.windll.user32.MessageBoxW(None,result.get('error','保存未完成'),'对白',0x40)
+            finally:checking_close.clear()
 
     def closing():
-        if getattr(server,"update_in_progress",False) and downloads._updater.state.get("state") != "waiting_for_exit": return False
+        if server.update_in_progress and (downloads._updater is None or downloads._updater.state.get("state") != "waiting_for_exit"): return False
         if gui_report or downloads._closing: return True
         if not checking_close.is_set():
             checking_close.set()
@@ -423,20 +479,17 @@ $b.Save($args[1],[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()
         else: raise
     finally:
         server.shutdown(); server.server_close()
-        try:
-            if getattr(server, 'reports', None): server.reports.close()
-        except (OSError, ValueError):
-            pass  # Derived CSV cache can be regenerated; audio cleanup still runs.
-        if getattr(server, 'workspaces', None): server.workspaces.close()
-        server.jobs.close()
+        cleanup=close_resources(server)
         downloads._close_folders()
-        if getattr(server, 'native_access', None): server.native_access.close()
         if installation_lease: installation_lease.close()
-        if gui_temp: gui_temp.cleanup()
+        if gui_temp and cleanup['ok']:gui_temp.cleanup()
+        if not cleanup['ok']:
+            report['passed']=False;report['cleanup_errors']=cleanup['errors']
+            if gui_temp:report['retained_verification_state']=gui_temp.name
         if gui_report:
             timeout.cancel()
             Path(gui_report).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
-    return 0 if not gui_report or report['passed'] else 1
+    return 0 if cleanup['ok'] and (not gui_report or report['passed']) else 1
 
 
 def main():

@@ -94,6 +94,17 @@ class FolderTests(unittest.TestCase):
         self.assertEqual(self.host.get_preferences()['theme'], 'light')
         self.assertTrue(self.host.set_preferences({'theme': 'dark'})['ok'])
         self.assertEqual(self.new_host().get_preferences()['theme'], 'dark')
+    def test_application_theme_only_preserves_sound_settings_and_rolls_back_failure(self):
+        sound={'voices':{'AGENT':'zh-CN-YunxiaNeural','USER':'zh-CN-YunyangNeural'},'rate':1.35,'pause_ms':650,'auto_voice':False,'manual_user_voice':True}
+        self.assertTrue(self.host.set_preferences(sound)['ok'])
+        self.assertTrue(self.host.set_application_preferences({'theme':'dark'})['ok'])
+        restored=self.new_host().get_preferences()
+        self.assertEqual({key:restored[key] for key in sound},sound)
+        self.assertEqual(restored['theme'],'dark')
+        self.assertFalse(self.host.set_application_preferences({'theme':'light','rate':1})['ok'])
+        with patch.object(self.host,'_persist',side_effect=OSError('fictional disk failure')):
+            self.assertFalse(self.host.set_application_preferences({'theme':'light'})['ok'])
+        self.assertEqual(self.host.get_preferences()['theme'],'dark')
         self.assertFalse(self.host.set_preferences({'theme': 'invalid'})['ok'])
         self.assertEqual(self.new_host().get_preferences()['theme'], 'dark')
     def test_save_idempotent_collision_receipt_restart_delete_and_change(self):

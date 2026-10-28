@@ -17,14 +17,13 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 
 from native_workspace import NativeWorkspaceAccess
+from web_dialogue.jobs import Jobs
 from web_dialogue.normalize import InputError
 from web_dialogue.workspaces import Workspaces
 
 
-class OfflineJobs:
-    batch_active=None
-    items={}
-    def start(self,*args,**kwargs):raise AssertionError('Online workers are forbidden')
+class OfflineJobs(Jobs):
+    def start(self,*args,**kwargs):raise AssertionError('Online workers are forbidden in offline verification')
 
 
 def wait_idle(work,ident):
@@ -43,7 +42,28 @@ def child(root,phase):
         (source/f'000123{suffix}.xml').write_text(f'<analyze><subject><function><text>虚构崩溃边界验收。</text><time>0,1000</time></function></subject><callInfo><callReference>fictional-crash</callReference><role>{role}</role></callInfo></analyze>')
     access=NativeWorkspaceAccess(state)
     source_cap=access.register(source,'input');target=access.register(output,'output')
-    work=Workspaces(state,OfflineJobs(),access,synthesizer=lambda preview:ROOT/'web_dialogue/silence.mp3')
+    if phase=='worker_source':
+        jobs=Jobs(state_dir=state)
+        original_spawn=subprocess.Popen
+        def fixture_spawn(command,**kwargs):
+            if 'web_dialogue.worker' not in command and '--worker' not in command:
+                return original_spawn(command,**kwargs)
+            fixture=('import json,pathlib,shutil,sys;folder=pathlib.Path(sys.argv[1]);'
+                     'shutil.copyfile(sys.argv[2],folder/"dialogue.mp3");'
+                     '(folder/"timeline.json").write_text("[]");'
+                     '(folder/"worker_status.json").write_text(json.dumps(dict(status="done",completed=1,total=1)))')
+            return original_spawn([sys.executable,'-c',fixture,command[-1],str(ROOT/'web_dialogue/silence.mp3')],**kwargs)
+        subprocess.Popen=fixture_spawn
+        open_result=jobs.open_result
+        def crash_verified_source(*args,**kwargs):
+            lease=open_result(*args,**kwargs)
+            assert lease.size>0 and lease.sha256
+            os._exit(75)
+        jobs.open_result=crash_verified_source
+        work=Workspaces(state,jobs,access)
+    else:
+        jobs=OfflineJobs()
+        work=Workspaces(state,jobs,access,synthesizer=lambda preview:ROOT/'web_dialogue/silence.mp3')
     ident=work.import_folder(source_cap['folder_id'])['id']
     assert wait_idle(work,ident)['ready']==1
     selected=work.select(ident,{'mode':'all'})
@@ -88,14 +108,15 @@ def child(root,phase):
 def verify(root,phase):
     completed=subprocess.run([sys.executable,'-B',str(Path(__file__).resolve()),'--child',str(root),'--phase',phase],
                              cwd=ROOT,capture_output=True,timeout=30)
-    expected={'cache_publish':71,'partial_cache':72,'output_publish':73,'receipt_commit':74}[phase]
+    expected={'cache_publish':71,'partial_cache':72,'output_publish':73,'receipt_commit':74,'worker_source':75}[phase]
     assert completed.returncode==expected,(phase,completed.returncode,completed.stderr.decode())
     checkpoint=json.loads((root/'checkpoint.json').read_text())
     access=NativeWorkspaceAccess(root/'state');calls=[]
     def synthesize(preview):
         calls.append(preview['filename'])
         return ROOT/'web_dialogue/silence.mp3'
-    work=Workspaces(root/'state',OfflineJobs(),access,synthesizer=synthesize)
+    jobs=OfflineJobs(state_dir=root/'state') if phase=='worker_source' else OfflineJobs()
+    work=Workspaces(root/'state',jobs,access,synthesizer=synthesize)
     ident=checkpoint['workspace'];cache=work._audio_path(ident,checkpoint['item'])
     try:
         before=work.summary(ident);safety=work.safety()
@@ -123,21 +144,21 @@ def verify(root,phase):
         return {'phase':phase,'child_exit_code':expected,'complete_cache_protected':complete,
                 'restart_automatic_synthesis':False,'recovery_synthesis_calls':len(calls),
                 'saved':1,'output_sha256':digest,'passed':True}
-    finally:work.close();access.close()
+    finally:work.close();jobs.close();access.close()
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--report',type=Path)
     parser.add_argument('--child',type=Path)
-    parser.add_argument('--phase',choices=('partial_cache','cache_publish','output_publish','receipt_commit'))
+    parser.add_argument('--phase',choices=('partial_cache','cache_publish','output_publish','receipt_commit','worker_source'))
     args=parser.parse_args()
     if args.child:
         child(args.child,args.phase)
         return
     if args.report is None:parser.error('--report is required')
     checks=[]
-    for phase in ('partial_cache','cache_publish','output_publish','receipt_commit'):
+    for phase in ('partial_cache','cache_publish','output_publish','receipt_commit','worker_source'):
         with tempfile.TemporaryDirectory(prefix='dialogue-crash-'+phase+'-') as raw:
             check=verify(Path(raw),phase);checks.append(check);print(json.dumps(check),flush=True)
     report={'passed':True,'online_synthesis':False,'real_process_abrupt_exit':True,'checks':checks}

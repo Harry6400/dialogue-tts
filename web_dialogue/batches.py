@@ -1,4 +1,7 @@
 """Bounded sequential batches. Outputs contain audio only, never source metadata."""
+from contextlib import contextmanager
+import os
+import tempfile
 import hashlib
 import json
 from pathlib import Path
@@ -34,8 +37,8 @@ class Batches:
     def __init__(self, jobs, catalog=None):
         self.jobs = jobs
         self.catalog = catalog
-        self.root = jobs.root / 'batches'
-        self.root.mkdir(mode=0o700)
+        self.temp = tempfile.TemporaryDirectory(prefix='dialogue-batches-')
+        self.root = Path(self.temp.name)
         self.items = {}
         self.requests = {}
         self.lock = threading.RLock()
@@ -44,6 +47,7 @@ class Batches:
         self.active = None
         self.leases = {}
         self.retired = []
+        self.closed = False
 
     def start(self, payload):
         if payload.get('consent') is not True:
@@ -52,7 +56,7 @@ class Batches:
         if not isinstance(request, str) or not 8 <= len(request) <= 100 or not all(c.isalnum() or c in '-_' for c in request):
             raise InputError('批次请求标识无效。')
         digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-        with self.jobs.lock, self.lock:
+        with self.jobs.transaction(), self.lock:
             if request in self.requests:
                 ident, previous = self.requests[request]
                 if previous != digest:
@@ -68,23 +72,8 @@ class Batches:
                 raise InputError('每批请选择 1–50 通对话。')
             if any(g['status'] != 'ready' for g in groups):
                 raise InputError('请先处理或排除有错误的文件组。')
-            self._reap_retired()
             if len(self.items) >= 5:
-                if len(self.retired) >= 5:
-                    raise InputError('旧批次文件仍被占用，请完成下载后再试。')
-                old = next((key for key in self.items if not any(path.parent == self.root / key for path in self.leases)), None)
-                if old is None:
-                    raise InputError('历史批次仍在下载，请完成下载后再新建批次。')
-                folder = self.root / old
-                retired = self.root / ('retired-' + old)
-                try:
-                    folder.rename(retired)
-                except OSError:
-                    raise InputError('旧批次文件仍被占用，请完成下载后再试。')
-                self.retired.append(retired)
-                del self.items[old]
-                self.requests = {k:v for k,v in self.requests.items() if v[0] != old}
-                self._reap_retired()
+                raise InputError('本机批次结果缓存已满；未保存的完整音频不会自动淘汰，请先保存并明确释放旧批次。')
             ident = uuid.uuid4().hex
             (self.root / ident).mkdir(mode=0o700)
             self.items[ident] = {'id': ident, 'status': 'queued', 'cancel': False, 'generation': 0,
@@ -98,14 +87,22 @@ class Batches:
     def _available(self):
         if self.closing or self.active:
             raise InputError('已有批次正在处理，请先等待或取消。')
-        if any(self.jobs.snapshot(i)['status'] in {'queued', 'running'} for i in self.jobs.items):
-            raise InputError('已有单通对话正在合成，请先等待或取消。')
+        self.jobs.ensure_available()
 
     def _launch(self, ident):
         self.active = ident
-        self.jobs.batch_active = ident
+        self.jobs.claim_batch(ident)
         self.thread = threading.Thread(target=self._run, args=(ident,), daemon=True)
         self.thread.start()
+
+    @contextmanager
+    def transaction(self):
+        with self.lock:
+            yield
+
+    def has_running(self):
+        with self.lock:
+            return self.active is not None or bool(self.thread and self.thread.is_alive())
 
     def _run(self, ident):
         batch = self.items[ident]
@@ -114,50 +111,65 @@ class Batches:
                 batch['status'] = 'running'
             for row in batch['items']:
                 with self.lock:
-                    if batch['cancel'] or self.closing:
-                        break
-                    if row['status'] != 'queued':
-                        continue
+                    if batch['cancel'] or self.closing: break
+                    if row['status'] != 'queued': continue
                     row['status'] = 'running'
+                job_id = row.get('retained_job')
+                transferred = False
                 try:
-                    job = self.jobs.start(row['script'], batch_owner=ident, fingerprint=row['fingerprint'], filename=row['filename'])
-                    with self.lock:
-                        row['job'] = job['id']
+                    if job_id is None:
+                        job = self.jobs.start(row['script'], batch_owner=ident, fingerprint=row['fingerprint'], filename=row['filename'])
+                        job_id = job['id']
+                    with self.lock: row['job'] = job_id
                     while True:
-                        if batch['cancel'] or self.closing:
-                            self.jobs.cancel(job['id'])
-                        result = self.jobs.snapshot(job['id'])
-                        with self.lock:
-                            row['completed'] = result['completed']
-                        if result['status'] not in {'queued', 'running'}:
-                            break
+                        if batch['cancel'] or self.closing: self.jobs.cancel(job_id)
+                        result = self.jobs.snapshot(job_id)
+                        with self.lock: row['completed'] = result['completed']
+                        if result['status'] not in {'queued','running'}: break
                         time.sleep(.1)
-                    with self.lock:
-                        row['status'] = result['status']
-                        if result['status'] == 'done':
-                            source = self.jobs.items[job['id']]['folder'] / 'dialogue.mp3'
-                            existing = sum(p.stat().st_size for p in (self.root / ident).glob('*.mp3'))
-                            if existing + source.stat().st_size > 200 * 1024 * 1024:
-                                raise InputError('批次输出超过 200MB，请缩小批次。')
-                            shutil.copyfile(source, self.root / ident / f'{row["number"]:03d}.mp3')
-                        elif result.get('error'):
-                            row['error'] = result['error']
+                    if result['status']=='done' or self.jobs.result_available(job_id):
+                        if not self.jobs.wait_finished(job_id,3): raise InputError('合成进程尚未退出。')
+                        with self.jobs.open_result(job_id,recovery=result['status']!='done') as source:
+                            existing=sum(path.stat().st_size for path in (self.root/ident).glob('*.mp3'))
+                            if existing+source.size>200*1024*1024: raise InputError('批次输出超过200MB。')
+                            target=self.root/ident/f'{row["number"]:03d}.mp3'
+                            staging=target.with_suffix('.partial')
+                            digest=hashlib.sha256();size=0
+                            with staging.open('wb') as output:
+                                for block in iter(lambda:source.read(65536),b''):
+                                    size+=len(block);digest.update(block);output.write(block)
+                                output.flush();os.fsync(output.fileno())
+                            if size!=source.size or digest.hexdigest()!=source.sha256: raise InputError('结果复制校验失败。')
+                            os.replace(staging,target)
+                            if os.name!='nt':
+                                descriptor=os.open(target.parent,os.O_RDONLY|os.O_DIRECTORY)
+                                try:os.fsync(descriptor)
+                                finally:os.close(descriptor)
+                        transferred=True
+                        with self.lock: row['status']='done'
+                    else:
+                        with self.lock:
+                            row['status']=result['status']
+                            if result.get('error'): row['error']=result['error']
                 except Exception:
-                    # Never expose exception text: libraries may include submitted text/URLs.
-                    with self.lock:
-                        row.update(status='error', error='此通合成失败；其他对话继续，可单独重试失败项。')
+                    with self.lock: row.update(status='error',error='此通合成或结果保存失败；完整源会保留，可重试失败项。')
                 finally:
-                    with self.lock:
-                        row.pop('job', None)
+                    if job_id is not None:
+                        try:
+                            if self.jobs.wait_finished(job_id,1) and (transferred or not self.jobs.result_available(job_id)):
+                                self.jobs.release(job_id)
+                                row.pop('retained_job',None)
+                            else: row['retained_job']=job_id
+                        except (KeyError,ValueError,OSError): row['retained_job']=job_id
+                    with self.lock: row.pop('job',None)
             with self.lock:
                 for row in batch['items']:
-                    if row['status'] == 'queued':
-                        row['status'] = 'cancelled'
-                batch['status'] = 'cancelled' if batch['cancel'] else ('done' if all(r['status'] == 'done' for r in batch['items']) else 'partial')
+                    if row['status']=='queued': row['status']='cancelled'
+                batch['status']='cancelled' if batch['cancel'] else ('done' if all(row['status']=='done' for row in batch['items']) else 'partial')
         finally:
-            with self.jobs.lock, self.lock:
-                self.active = None
-                self.jobs.batch_active = None
+            with self.jobs.transaction(),self.lock:
+                self.active=None
+                self.jobs.release_batch(ident)
 
     def audio_fingerprint(self, ident, number):
         with self.lock:
@@ -190,7 +202,7 @@ class Batches:
         return self.snapshot(ident)
 
     def retry(self, ident):
-        with self.jobs.lock, self.lock:
+        with self.jobs.transaction(), self.lock:
             self._available()
             batch = self.items[ident]
             failed = [r for r in batch['items'] if r['status'] == 'error']
@@ -243,9 +255,25 @@ class Batches:
             except OSError: continue
             self.retired.remove(folder)
 
+    def release(self, ident):
+        with self.lock:
+            batch=self.items[ident]
+            if self.active==ident or any(path.parent==self.root/ident for path in self.leases):
+                raise InputError('批次仍在执行或下载，不能释放。')
+            if any(row.get('retained_job') for row in batch['items']):
+                raise InputError('批次仍有完整源等待保存，请先重试失败项。')
+            shutil.rmtree(self.root/ident)
+            del self.items[ident]
+            self.requests={key:value for key,value in self.requests.items() if value[0]!=ident}
+
     def close(self):
         with self.lock:
-            self.closing = True
-            for batch in self.items.values(): batch['cancel'] = True
-        if self.thread and self.thread is not threading.current_thread():
-            self.thread.join(timeout=15)
+            if self.closed:return
+            self.closing=True
+            for batch in self.items.values():batch['cancel']=True
+        if self.thread and self.thread is not threading.current_thread():self.thread.join(timeout=15)
+        with self.lock:
+            if self.thread and self.thread.is_alive():raise InputError('批次后台尚未完全停止。')
+            if self.leases:raise InputError('批次结果仍在下载，暂不能清理。')
+            self.temp.cleanup()
+            self.closed=True

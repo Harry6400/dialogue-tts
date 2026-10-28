@@ -131,7 +131,7 @@ class NativeGateTests(unittest.TestCase):
         import threading,types
         from native_windows_updater import NativeUpdaterMixin
         bridge=NativeUpdaterMixin();bridge._lock=threading.Lock();bridge._folder_lock=threading.RLock();bridge._update_gate=threading.Lock()
-        bridge._update_server=types.SimpleNamespace(update_lock=threading.RLock(),update_in_progress=False,jobs=types.SimpleNamespace(lock=threading.RLock(),items={}),batches=types.SimpleNamespace(lock=threading.RLock(),active=None))
+        bridge._update_server=types.SimpleNamespace(update_lock=threading.RLock(),update_in_progress=False,jobs=types.SimpleNamespace(transaction=threading.RLock,has_running=lambda:False),batches=types.SimpleNamespace(transaction=threading.RLock,has_running=lambda:False))
         bridge._updater=types.SimpleNamespace(state={'state':'available'},offer={'version':'0.3.1'})
         bridge._window=types.SimpleNamespace(evaluate_js=lambda code:safety if code=='window.dialogueUpdateSafety()' else None,create_confirmation_dialog=lambda *_:False)
         return bridge
@@ -140,7 +140,7 @@ class NativeGateTests(unittest.TestCase):
     def test_cancel_releases_all_gates(self):
         bridge=self.bridge({'busy':False,'unsaved':False});self.assertEqual(bridge.install_update()['state'],'cancelled');self.assertFalse(bridge._update_server.update_in_progress);self.assertTrue(bridge._lock.acquire(False));bridge._lock.release()
     def test_busy_batch_refuses(self):
-        bridge=self.bridge({'busy':False,'unsaved':False});bridge._update_server.batches.active='id';self.assertEqual(bridge.install_update()['state'],'error')
+        bridge=self.bridge({'busy':False,'unsaved':False});bridge._update_server.batches.has_running=lambda:True;self.assertEqual(bridge.install_update()['state'],'error')
 
 if __name__=='__main__':unittest.main()
 

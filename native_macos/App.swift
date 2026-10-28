@@ -21,6 +21,18 @@ let updateMenuCheckScript = """
 })();
 """
 
+func trustedNativeAudioMetadata(_ response: URLResponse) -> [String: Any]? {
+    guard let response = response as? HTTPURLResponse, response.statusCode == 200, response.mimeType == "audio/mpeg",
+          let url = response.url, url.query == nil, url.fragment == nil,
+          url.path.range(of: "^/api/(jobs/[a-f0-9]{32}/audio|batches/[a-f0-9]{32}/audio/[0-9]{3})$", options: .regularExpression) != nil,
+          response.expectedContentLength > 0, response.expectedContentLength <= 256 * 1024 * 1024,
+          let fingerprint = response.value(forHTTPHeaderField: "X-Dialogue-Fingerprint"), fingerprint.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+          let disposition = response.value(forHTTPHeaderField: "Content-Disposition"),
+          let name = disposition.split(separator: "\"").dropFirst().first.map(String.init), FolderState.validName(name),
+          disposition == "attachment; filename=\"\(name)\"" || disposition == "inline; filename=\"\(name)\"" else { return nil }
+    return ["resource_path": url.path, "filename": name, "fingerprint": fingerprint, "size": response.expectedContentLength]
+}
+
 // terminateLater runs a nested AppKit loop. Starting it inside a main-queue
 // block prevents the later main-queue reply from running until that block exits.
 func scheduleNativeTermination(_ action: @escaping () -> Void) {
@@ -41,7 +53,12 @@ func mergeNativeCloseSafety(_ page: [String: Any]?, _ backend: [String: Any]?) -
     result["running"] = running || backendBusy
     result["saving"] = saving || backendSaving
     result["pending"] = pending || backendPending
-    result["unsaved"] = unsaved
+    let legacyUnsaved: Bool
+    if backend["legacy_unsaved"] != nil {
+        guard let value = boolean(backend["legacy_unsaved"]) else { return nil }
+        legacyUnsaved = value
+    } else { legacyUnsaved = false }
+    result["unsaved"] = unsaved || legacyUnsaved
     result["persistent_unsaved"] = backendUnsaved
     result["persistent_workspace"] = boolean(page["persistent_workspace"]) == true || backendBusy || backendUnsaved
     return result
@@ -233,6 +250,8 @@ final class FolderState {
             return ["fingerprint": fp, "name": name, "error": "同名文件已存在且无法核实，请移动旧文件或选择其他目录。"]
         }
     }
+    // Legacy JSON writer retained for migration regressions, never invoked by
+    // production MP3 saves. Active saves delegate to NativeWorkspaceAccess.
     func save(_ data: Data, route: String, fingerprint: String, filename: String, directory: URL, registry: SavedDownloadRegistry) throws -> [String: Any] {
         guard Self.validName(filename) else { throw SelectedXMLFolderError.unreadable }
         if let saved = completed([fingerprint], directory: directory, registry: registry, expectedNames: [fingerprint: filename]).first {
@@ -305,6 +324,12 @@ final class FolderState {
             } else { result[role + "_folder"] = NSNull() }
         }
         return result
+    }
+    func setApplicationPreferences(_ args: [String: Any]) throws -> Bool {
+        guard Set(args.keys) == Set(["theme"]), let theme = args["theme"] as? String, ["light", "dark"].contains(theme) else { return false }
+        let previous = values
+        values["theme"] = theme
+        do { try persist(); return true } catch { values = previous; throw error }
     }
     func setPreferences(_ args: [String: Any]) throws -> Bool {
         guard let voices = args["voices"] as? [String: String], voices.count <= 2,
@@ -384,6 +409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         return FolderState()
     }()
     private var downloadSources: [ObjectIdentifier: String] = [:]
+    private var capturedDownloads: [ObjectIdentifier: String] = [:]
+    private var captureDirectories: [ObjectIdentifier: URL] = [:]
     private var trustedDownloads = Set<ObjectIdentifier>()
     private var saveWaiters: [String: [([String: Any]) -> Void]] = [:]
     private let nativeToken = (UUID().uuidString + UUID().uuidString).replacingOccurrences(of: "-", with: "")
@@ -515,6 +542,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         savedDownloads.clear()
         trustedDownloads.removeAll()
         downloadSources.removeAll()
+        capturedDownloads.removeAll()
+        captureDirectories.removeAll()
         saveWaiters.removeAll()
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "dialogueReveal")
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "dialogueFolders")
@@ -544,8 +573,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 alert.informativeText = running ? "退出将停止正在合成的任务，并丢弃未保存的临时音频。" : "退出后，未保存的临时音频将被清理。"
                 alert.addButton(withTitle: "返回保存"); alert.addButton(withTitle: "放弃并退出"); alert.addButton(withTitle: "取消退出")
                 let answer = alert.runModal()
-                if answer == .alertFirstButtonReturn { self.webView.evaluateJavaScript("window.dialogueShowUnsaved && window.dialogueShowUnsaved()", completionHandler: nil); NSApp.reply(toApplicationShouldTerminate: false); return }
+                if answer == .alertFirstButtonReturn { NSApp.reply(toApplicationShouldTerminate: false); self.returnToUnsavedAudio(); return }
                 guard answer == .alertSecondButtonReturn else { NSApp.reply(toApplicationShouldTerminate: false); return }
+                self.checkingClose = true
+                self.workspaceSaves += 1
+                self.nativeRequest("/api/native/audio-captures/discard", [:]) { result in
+                    self.workspaceSaves -= 1
+                    guard result["ok"] as? Bool == true else {
+                        self.checkingClose = false
+                        self.showAudioSaveError("未能安全清理临时音频，请返回保存或稍后再试。")
+                        NSApp.reply(toApplicationShouldTerminate: false); return
+                    }
+                    self.checkingClose = true
+                    self.finishTermination(process, approvedPersistent: running || safety["persistent_unsaved"] as? Bool == true)
+                }
+                return
             } else if safety["persistent_unsaved"] as? Bool == true {
                 let alert = NSAlert(); alert.messageText = "未保存的完整音频已缓存在本机"
                 alert.informativeText = "退出会中断后台任务，但会保留进度和完整缓存。下次打开核验目录后，可重试保存或明确授权后继续生成。"
@@ -675,16 +717,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let registered: ([String: Any]) -> Void = { [weak self] folder in
             guard let self = self else { return }
             guard folder["ok"] as? Bool != false, let id = folder["folder_id"] as? String else { self.workspaceSaves -= 1; reply(folder); return }
-            self.nativeRequest("/api/native/outputs/save", ["folder_id": id, "resource_path": route]) { result in
+            let finish: ([String: Any]) -> Void = { result in
                 self.workspaceSaves -= 1
-                let receipt = self.adoptReceipt(result)
-                reply(receipt)
+                let receipt = self.adoptReceipt(result); reply(receipt)
                 if receipt["ok"] as? Bool == true { self.notifyPage("dialogueNativeSaved", payload: receipt) }
+            }
+            self.nativeRequest("/api/native/audio-captures/find", ["resource_path": route]) { lookup in
+                guard lookup["ok"] as? Bool == true else { finish(lookup); return }
+                if let capture = lookup["capture"] as? [String: Any], let captureID = capture["capture_id"] as? String {
+                    self.nativeRequest("/api/native/audio-captures/save", ["capture_id": captureID, "folder_id": id], completion: finish)
+                } else {
+                    self.nativeRequest("/api/native/outputs/save", ["folder_id": id, "resource_path": route], completion: finish)
+                }
             }
         }
         if let directory = directory { nativeRequest("/api/native/folders", ["kind": "output", "path": directory.path], completion: registered) }
         else if let id = folderID { workspaceFolder(id, role: "output", completion: registered) }
         else { workspaceSaves -= 1; reply(["ok": false, "error": "请选择结果目录"]) }
+    }
+
+    private func showAudioSaveError(_ message: String) {
+        let alert = NSAlert(); alert.messageText = "音频尚未保存"; alert.informativeText = message
+        alert.beginSheetModal(for: window)
+    }
+
+    private func saveCapturedAudio(_ captureID: String, directory: URL) {
+        workspaceSaves += 1
+        nativeRequest("/api/native/folders", ["kind": "output", "path": directory.path]) { [weak self] folder in
+            guard let self = self else { return }
+            guard folder["ok"] as? Bool != false, let folderID = folder["folder_id"] as? String else {
+                self.workspaceSaves -= 1; self.showAudioSaveError("结果目录不可用，完整音频仍保留在本机。"); return
+            }
+            self.nativeRequest("/api/native/audio-captures/save", ["capture_id": captureID, "folder_id": folderID]) { result in
+                self.workspaceSaves -= 1
+                if result["ok"] as? Bool == true {
+                    self.notifyPage("dialogueNativeSaved", payload: self.adoptReceipt(result))
+                } else { self.showAudioSaveError(result["error"] as? String ?? "保存失败，完整音频仍保留在本机。") }
+            }
+        }
+    }
+
+    private func chooseCapturedAudioDestination(_ capture: [String: Any]) {
+        guard let ident = capture["capture_id"] as? String, ident.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil,
+              let name = capture["filename"] as? String, FolderState.validName(name) else { showAudioSaveError("原生音频信息无法确认。"); return }
+        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+        panel.message = "保存已下载的 \(name)。取消后完整缓存仍会保留。"
+        panel.beginSheetModal(for: window) { [weak self] answer in
+            guard let self = self, !self.closing, answer == .OK, let directory = panel.url else { return }
+            self.saveCapturedAudio(ident, directory: directory)
+        }
+    }
+
+    private func returnToUnsavedAudio() {
+        workspaceSaves += 1
+        nativeRequest("/api/native/audio-captures/pending", [:]) { [weak self] result in
+            guard let self = self else { return }
+            self.workspaceSaves -= 1
+            guard result["ok"] as? Bool == true, let captures = result["captures"] as? [[String: Any]], captures.count <= 128 else {
+                self.showAudioSaveError("无法确认本机待保存音频，请稍后重试。"); return
+            }
+            if let first = captures.first(where: { $0["state"] as? String == "ready" }) { self.chooseCapturedAudioDestination(first) }
+            else if !captures.isEmpty { self.showAudioSaveError("下载未完整完成或缓存已变化，不能直接保存。请取消退出后重新生成，或退出时明确放弃这些临时缓存。") }
+            else { self.webView.evaluateJavaScript("window.dialogueShowUnsaved && window.dialogueShowUnsaved()", completionHandler: nil) }
+        }
     }
 
     private func saveWorkspaceReport(_ reportID: String, reply: @escaping ([String: Any]) -> Void) {
@@ -731,6 +826,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         case "set_preferences":
             do { reply(try folderState.setPreferences(args) ? ["ok": true] : ["ok": false, "error": "设置无效"]) }
             catch { reply(["ok": false, "error": "无法保存设置"]) }
+        case "set_application_preferences":
+            do { reply(try folderState.setApplicationPreferences(args) ? ["ok": true] : ["ok": false, "error": "应用设置无效"]) }
+            catch { reply(["ok": false, "error": "无法保存应用设置"]) }
         case "choose_workspace_input", "choose_workspace_output":
             let role = method == "choose_workspace_input" ? "input" : "output"
             let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
@@ -820,6 +918,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     private func performAudioSave(_ route: String, directory: URL, id: String?, reply: @escaping ([String: Any]) -> Void) {
+        // Historical JSON-writer adapter retained only for migration regressions.
+        // Production MP3 downloads use capture IDs and the canonical SQLite writer.
         guard let base = baseURL, let target = URL(string: route, relativeTo: base)?.absoluteURL, isLocal(target) else { reply(["ok": false, "error": "输出请求无效"]); return }
             let key = directory.path + "|" + route
             if saveWaiters[key] != nil { saveWaiters[key]?.append(reply); return }
@@ -1022,7 +1122,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { decisionHandler(.cancel); return }
-        if isLocal(url) { decisionHandler(action.shouldPerformDownload ? .download : .allow); return }
+        if isLocal(url) {
+            if action.shouldPerformDownload, url.path.range(of: "^/api/(jobs/[a-f0-9]{32}/audio|batches/[a-f0-9]{32}/audio/[0-9]{3})$", options: .regularExpression) != nil {
+                workspaceSaves += 1
+                nativeRequest("/api/native/audio-captures/find", ["resource_path": url.path]) { [weak self] lookup in
+                    guard let self = self else { decisionHandler(.cancel); return }
+                    self.workspaceSaves -= 1
+                    guard !self.closing, lookup["ok"] as? Bool == true else { decisionHandler(.cancel); self.showAudioSaveError("无法确认音频缓存，请稍后重试。"); return }
+                    if let capture = lookup["capture"] as? [String: Any] {
+                        decisionHandler(.cancel)
+                        self.chooseCapturedAudioDestination(capture)
+                    } else { decisionHandler(.download) }
+                }
+            } else { decisionHandler(action.shouldPerformDownload ? .download : .allow) }
+            return
+        }
         if isRelease(url) && action.navigationType == .linkActivated { NSWorkspace.shared.open(url) }
         decisionHandler(.cancel)
     }
@@ -1078,14 +1192,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             return
         }
         if source.path.range(of: "^/api/(jobs/[a-f0-9]{32}/audio|batches/[a-f0-9]{32}/audio/[0-9]{3})$", options: .regularExpression) != nil {
-            completionHandler(nil)
-            trustedDownloads.remove(id); downloadSources.removeValue(forKey: id)
+            guard let metadata = trustedNativeAudioMetadata(response) else {
+                trustedDownloads.remove(id); downloadSources.removeValue(forKey: id)
+                completionHandler(nil); showAudioSaveError("可信音频响应不完整，未创建保存回执。"); return
+            }
             let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
             panel.beginSheetModal(for: window) { [weak self] result in
-                guard let self = self, !self.closing, result == .OK, let directory = panel.url else { return }
-                self.performAudioSave(source.path, directory: directory, id: nil) { result in
-                    if result["ok"] as? Bool == true { self.notifyPage("dialogueNativeSaved", payload: result.merging(["resource_path": source.path]) { _, new in new }) }
-                    else if let message = result["error"] as? String { let alert=NSAlert();alert.messageText=message;alert.beginSheetModal(for:self.window) }
+                guard let self = self else { completionHandler(nil); return }
+                guard !self.closing, result == .OK, let directory = panel.url else {
+                    self.trustedDownloads.remove(id); self.downloadSources.removeValue(forKey: id); completionHandler(nil); return
+                }
+                self.nativeRequest("/api/native/audio-captures/reserve", metadata) { reserved in
+                    guard reserved["ok"] as? Bool == true, let captureID = reserved["capture_id"] as? String,
+                          captureID.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil, let path = reserved["path"] as? String else {
+                        self.trustedDownloads.remove(id); self.downloadSources.removeValue(forKey: id); completionHandler(nil)
+                        self.showAudioSaveError(reserved["error"] as? String ?? "无法创建受保护的音频缓存。"); return
+                    }
+                    let captureURL = URL(fileURLWithPath: path).standardizedFileURL
+                    let expected = self.folderState.preferencesURL.deletingLastPathComponent().appendingPathComponent("native-audio", isDirectory: true).appendingPathComponent(captureID, isDirectory: true).appendingPathComponent("audio.mp3").standardizedFileURL
+                    guard !self.closing, captureURL == expected else {
+                        self.trustedDownloads.remove(id); self.downloadSources.removeValue(forKey: id)
+                        self.nativeRequest("/api/native/audio-captures/abort", ["capture_id": captureID]) { _ in }
+                        completionHandler(nil); return
+                    }
+                    self.capturedDownloads[id] = captureID; self.captureDirectories[id] = directory
+                    completionHandler(captureURL)
                 }
             }
             return
@@ -1106,6 +1237,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let id = ObjectIdentifier(download)
         guard trustedDownloads.remove(id) != nil else { return }
         let sourcePath = downloadSources.removeValue(forKey: id)
+        if let captureID = capturedDownloads.removeValue(forKey: id) {
+            let directory = captureDirectories.removeValue(forKey: id)
+            workspaceSaves += 1
+            nativeRequest("/api/native/audio-captures/complete", ["capture_id": captureID]) { [weak self] completed in
+                guard let self = self else { return }
+                self.workspaceSaves -= 1
+                guard completed["ok"] as? Bool == true, let directory = directory else {
+                    self.showAudioSaveError(completed["error"] as? String ?? "音频缓存未完整，未生成保存回执。"); return
+                }
+                self.saveCapturedAudio(captureID, directory: directory)
+            }
+            return
+        }
         if var record = savedDownloads.completed(id) {
             if let sourcePath = sourcePath, sourcePath.range(of: "^/api/(jobs/[a-zA-Z0-9_-]{1,100}/audio|batches/[a-zA-Z0-9_-]{1,100}/(zip|audio/[0-9]{3}))$", options: .regularExpression) != nil { record["resource_path"] = sourcePath }
             notifyPage("dialogueNativeSaved", payload: record)
@@ -1116,6 +1260,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let id = ObjectIdentifier(download)
         trustedDownloads.remove(id)
         downloadSources.removeValue(forKey: id)
+        captureDirectories.removeValue(forKey: id)
+        if let captureID = capturedDownloads.removeValue(forKey: id) {
+            workspaceSaves += 1
+            nativeRequest("/api/native/audio-captures/abort", ["capture_id": captureID]) { [weak self] _ in self?.workspaceSaves -= 1 }
+        }
         savedDownloads.failed(id)
         guard !closing else { return }
         let detail = error as NSError

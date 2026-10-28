@@ -19,183 +19,36 @@ import uuid
 
 from .normalize import VOICES, InputError, normalize
 from .xml_example import XML_EXAMPLE
+from .jobs import Jobs
+from .source_processing import normalize_source, audition_script
 
-def normalize_source(payload, catalog=None):
-    if not isinstance(payload, dict) or payload.get("format") != "xml_pair" or "data" in payload:
-        raise InputError("仅支持双声道 XML 输入。")
-    result = normalize(payload, catalog)
-    from .output_names import pair_filename
-    try:
-        result['filename'] = pair_filename(payload['xml_files'])
-    except ValueError as exc:
-        raise InputError(str(exc)) from exc
-    return result
 
-def audition_script(payload, catalog=None):
-    if payload.get("consent") is not True:
-        raise InputError("请先允许发送试听文本至微软语音服务。")
-    sample = {"format": "xml_pair", "xml_files": XML_EXAMPLE,
-              "voices": payload.get("voices", {}), "rate": payload.get("rate", 1),
-              "pause_ms": payload.get("pause_ms", 250)}
-    script = normalize_source(sample, catalog)["script"]
-    script["lines"] = script["lines"][:2]
-    return script
 
 MAX_BODY = 64 * 1024 * 1024
 ROOT = Path(__file__).resolve().parent.parent
 
-
-class Jobs:
-    def __init__(self, timeout_seconds=900):
-        self.timeout_seconds = timeout_seconds
-        self.request_ids = {}
-        self.temp = tempfile.TemporaryDirectory(prefix="dialogue-tts-")
-        self.root = Path(self.temp.name)
-        self.items = {}
-        self.lock = threading.RLock()
-
-    def start(self, script, request_id=None, batch_owner=None, fingerprint=None, audition=False, filename='audition.mp3'):
-        import hashlib
-        from .output_names import valid_output_name
-        if not audition and not valid_output_name(filename):
-            raise InputError('输出文件名无效。')
-        binding = hashlib.sha256(json.dumps([script, fingerprint, filename, audition], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-        with self.lock:
-            if getattr(self, "batch_active", None) and batch_owner != self.batch_active:
-                raise InputError("已有批次正在合成，请等待完成或先取消。")
-            if request_id is not None:
-                if not isinstance(request_id, str) or not 8 <= len(request_id) <= 100 or not all(c.isalnum() or c in "-_" for c in request_id):
-                    raise InputError("请求标识无效，请刷新页面。")
-                if request_id in self.request_ids:
-                    old_id = self.request_ids[request_id]
-                    if old_id in self.items:
-                        if self.items[old_id]['request_binding'] != binding:
-                            raise InputError('同一请求标识的内容或文件名发生变化，请重新生成请求。')
-                        return self.snapshot(old_id)
-            for ident in self.items:
-                if self.snapshot(ident)["status"] in {"queued", "running"}:
-                    raise InputError("已有任务正在合成，请等待完成或先取消。")
-            audition_ids = [key for key, item in self.items.items() if item.get("audition")]
-            victim = audition_ids[0] if audition and len(audition_ids) >= 3 else None
-            production_ids = [key for key, item in self.items.items() if not item.get("audition")]
-            if not audition and len(production_ids) >= 30:
-                victim = production_ids[0]
-            if victim is not None:
-                shutil.rmtree(self.items[victim]["folder"], ignore_errors=True)
-                del self.items[victim]
-                self.request_ids = {k:v for k,v in self.request_ids.items() if v != victim}
-            ident = uuid.uuid4().hex
-            folder = self.root / ident
-            folder.mkdir(mode=0o700)
-            (folder / "normalized.json").write_text(json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
-            log = open(folder / "process.log", "wb")
+def close_resources(server):
+    """Composition-root shutdown; failed components never skip their peers."""
+    lock = getattr(server, '_resources_lock', None)
+    if lock is None:
+        lock = server._resources_lock = threading.RLock()
+    with lock:
+        closed = getattr(server, '_closed_resources', set())
+        server._closed_resources = closed
+        errors = []
+        for name in ('workspaces', 'batches', 'jobs', 'reports', 'audio_captures', 'native_access'):
+            component = getattr(server, name, None)
+            if component is None or name in closed:
+                continue
             try:
-                process = subprocess.Popen(
-                    ([sys.executable, "--worker", str(folder)] if getattr(sys, "frozen", False) else [sys.executable, "-m", "web_dialogue.worker", str(folder)]), cwd=str(ROOT),
-                    stdout=log, stderr=log, start_new_session=(os.name != "nt"),
-                    env={**os.environ, "PYTHONUNBUFFERED": "1"},
-                )
-            finally:
-                log.close()
-            self.items[ident] = {"folder": folder, "process": process, "total": len(script["lines"]),
-                                 "fingerprint": fingerprint, "filename": filename, "request_binding": binding, "audition": audition, "started": time.monotonic(), "cancelled": False, "timed_out": False}
-            timer = threading.Timer(self.timeout_seconds, self.expire, args=(ident,))
-            timer.daemon = True
-            self.items[ident]["timer"] = timer
-            if request_id:
-                self.request_ids[request_id] = ident
-            timer.start()
-            return self.snapshot(ident)
+                component.close()
+            except Exception:
+                errors.append(name)
+            else:
+                closed.add(name)
+        return {'ok': not errors, 'errors': errors}
 
-    def expire(self, ident):
-        with self.lock:
-            item = self.items.get(ident)
-            if item and item["process"].poll() is None:
-                item["timed_out"] = True
-                self.kill(item)
 
-    def kill(self, item):
-        proc = item["process"]
-        if proc.poll() is None:
-            try:
-                if os.name != "nt":
-                    os.killpg(proc.pid, signal.SIGTERM)
-                else:
-                    # Frozen one-file builds have a bootloader child: terminate the
-                    # process tree we started, not unrelated app processes.
-                    taskkill = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "taskkill.exe"
-                    try:
-                        killed = subprocess.run([str(taskkill), "/PID", str(proc.pid), "/T", "/F"],
-                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
-                        if killed.returncode != 0 and proc.poll() is None:
-                            item["termination_uncertain"] = True
-                            proc.terminate()
-                    except (OSError, subprocess.TimeoutExpired):
-                        item["termination_uncertain"] = True
-                        proc.terminate()
-                proc.wait(timeout=3)
-            except (ProcessLookupError, subprocess.TimeoutExpired):
-                if proc.poll() is None:
-                    if os.name != "nt":
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    else:
-                        proc.kill()
-                    proc.wait(timeout=3)
-
-    def snapshot(self, ident):
-        with self.lock:
-            if ident not in self.items:
-                raise KeyError("任务不存在，或服务器已重启。")
-            item = self.items[ident]
-            result = {"id": ident, "status": "queued", "completed": 0, "total": item["total"], "filename": item['filename']}
-            status_file = item["folder"] / "worker_status.json"
-            if status_file.exists():
-                try:
-                    result.update(json.loads(status_file.read_text(encoding="utf-8")))
-                except (OSError, ValueError):
-                    pass  # atomic writes; a transient read never means success
-            if item.get("termination_uncertain"):
-                result.update(status="error", error="已停止启动器，但无法确认后台完全退出。请关闭应用后重试。")
-            elif item["cancelled"]:
-                result["status"] = "cancelled"
-            elif item["timed_out"]:
-                result.update(status="error", error="任务超过 15 分钟，已停止。请拆分较长对话后再试。")
-            elif item["process"].poll() is not None and result["status"] not in {"done", "error"}:
-                result.update(status="error", error="合成进程意外结束，请检查依赖或重新运行。")
-            if result["status"] == "done":
-                if not (item["folder"] / "dialogue.mp3").is_file():
-                    result.update(status="error", error="输出文件不存在，不能认定合成成功。")
-                else:
-                    result["download_url"] = f"/api/jobs/{ident}/audio"
-                    result["normalized_url"] = f"/api/jobs/{ident}/normalized"
-                    result["timeline_url"] = f"/api/jobs/{ident}/timeline"
-            if item.get("fingerprint"):
-                result["fingerprint"] = item["fingerprint"]
-            return result
-
-    def cancel(self, ident):
-        with self.lock:
-            item = self.items.get(ident)
-            if item is None:
-                raise KeyError("任务不存在。")
-            if self.snapshot(ident)["status"] in {"queued", "running"}:
-                item["cancelled"] = True
-                item["timer"].cancel()
-                self.kill(item)
-                for filename in ("dialogue.mp3", "timeline.json"):
-                    (item["folder"] / filename).unlink(missing_ok=True)
-            return self.snapshot(ident)
-
-    def close(self):
-        if hasattr(self, "workspaces"):
-            self.workspaces.close()
-        if hasattr(self, "batches"):
-            self.batches.close()
-        with self.lock:
-            for item in self.items.values():
-                item["timer"].cancel()
-                self.kill(item)
-            self.temp.cleanup()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -301,42 +154,32 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[3] not in kinds or status["status"] != "done":
                     return self.json({"error": "音频尚未成功生成。"}, 404)
                 filename, mime = kinds[parts[3]]
-                target = self.server.jobs.items[parts[2]]["folder"] / filename
-                size = target.stat().st_size
-                # Byte-range support lets browser audio seek without downloading again.
-                start, end, http_status = 0, size - 1, 200
-                raw_range = self.headers.get("Range")
-                if raw_range and parts[3] == "audio":
-                    import re
-                    match = re.fullmatch(r"bytes=(\d+)-(\d*)", raw_range)
-                    if not match:
-                        return self.json({"error": "不支持的字节范围。"}, 416)
-                    start = int(match[1])
-                    end = min(int(match[2]) if match[2] else size - 1, size - 1)
-                    if start > end or start >= size:
-                        return self.json({"error": "字节范围超出文件。"}, 416)
-                    http_status = 206
-                self.headers_for(http_status, mime, end - start + 1)
-                self.send_header("Accept-Ranges", "bytes")
-                if parts[3] == "audio" and status.get("fingerprint"):
-                    self.send_header("X-Dialogue-Fingerprint", status["fingerprint"])
-                download_name = self.server.jobs.items[parts[2]]['filename'] if parts[3] == 'audio' else filename
-                self.send_header("Content-Disposition", f'attachment; filename="{download_name}"')
-                if http_status == 206:
-                    self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-                self.end_headers()
-                with open(target, "rb") as handle:
-                    handle.seek(start)
-                    remaining = end - start + 1
+                with self.server.jobs.open_result(parts[2],parts[3]) as handle:
+                    size=handle.size
+                    start,end,http_status=0,size-1,200
+                    raw_range=self.headers.get('Range')
+                    if raw_range and parts[3]=='audio':
+                        import re
+                        match=re.fullmatch(r'bytes=(\d+)-(\d*)',raw_range)
+                        if not match:return self.json({'error':'不支持的字节范围。'},416)
+                        start=int(match[1]);end=min(int(match[2]) if match[2] else size-1,size-1)
+                        if start>end or start>=size:return self.json({'error':'字节范围超出文件。'},416)
+                        http_status=206
+                    self.headers_for(http_status,mime,end-start+1)
+                    self.send_header('Accept-Ranges','bytes')
+                    if handle.fingerprint:self.send_header('X-Dialogue-Fingerprint',handle.fingerprint)
+                    self.send_header('Content-Disposition',f'attachment; filename="{handle.filename}"')
+                    if http_status==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
+                    self.end_headers();handle.seek(start);remaining=end-start+1
                     while remaining:
-                        chunk = handle.read(min(65536, remaining))
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        remaining -= len(chunk)
+                        chunk=handle.read(min(65536,remaining))
+                        if not chunk:break
+                        self.wfile.write(chunk);remaining-=len(chunk)
                 return
             except KeyError as exc:
                 return self.json({"error": str(exc)}, 404)
+            except (ValueError,OSError):
+                return self.json({'error':'合成结果暂不可读取，请核验本机缓存后重试。'},409)
         self.json({"error": "页面不存在。"}, 404)
 
     def do_POST(self):
@@ -379,10 +222,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(post_workspace(self, path, payload))
             if path == "/api/update/lock":
                 from .runtime_safety import combined_safety
-                if any(combined_safety(getattr(self.server, 'workspaces', None), getattr(self.server, 'reports', None)).values()):
+                if any(combined_safety(self.server.workspaces,self.server.reports,self.server.audio_captures,self.server.jobs).values()):
                     return self.json({'error':'请先暂停任务并保存完整音频，再更新。'},409)
-                with self.server.jobs.lock, self.server.batches.lock:
-                    if any(item["process"].poll() is None for item in self.server.jobs.items.values()) or self.server.batches.active:
+                with self.server.jobs.transaction(), self.server.batches.transaction():
+                    if self.server.jobs.has_running() or self.server.batches.has_running():
                         return self.json({"error":"正在合成，请稍后更新"}, 409)
                 self.server.update_in_progress = True
                 return self.json({"ok":True})
@@ -428,7 +271,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(self.server.jobs.cancel(parts[2]))
             return self.json({"error": "接口不存在。"}, 404)
         except (ValueError, UnicodeError, RecursionError) as exc:
-            if isinstance(exc, InputError):
+            from native_audio import AudioCaptureError
+            if isinstance(exc, (InputError,AudioCaptureError)):
                 message = str(exc)
             else:
                 message = "请求格式无效，请重新载入 XML 后重试。"
@@ -465,30 +309,37 @@ def make_server(port=8765, bind="127.0.0.1", public_origin=None, access_key=None
     server.update_in_progress = False
     from .voice_catalog import load_catalog
     server.voice_catalog = catalog if catalog is not None else load_catalog()
-    server.jobs = Jobs()
-    from .batches import Batches
-    server.batches = Batches(server.jobs, server.voice_catalog["voices"])
-    server.jobs.batches = server.batches
-    server.workspaces = None
-    server.reports = None
-    server.native_access = None
-    server.workspace_access = None
-    server.native_token = None
     native_token = native_token or os.environ.pop('DIALOGUE_NATIVE_TOKEN', None)
-    if state_dir is not None and native_token:
-        if bind != '127.0.0.1' or public_origin:
-            server.server_close()
-            server.jobs.close()
-            raise ValueError('原生工作区只能监听本机。')
-        from native_workspace import NativeWorkspaceAccess
-        from .workspaces import Workspaces
-        server.native_token = native_token
-        server.native_access = NativeWorkspaceAccess(state_dir)
-        server.workspace_access = server.native_access
-        server.workspaces = Workspaces(state_dir, server.jobs, server.native_access, server.voice_catalog)
-        server.jobs.workspaces = server.workspaces
-        from .workspace_reports import WorkspaceReports
-        server.reports = WorkspaceReports(server.workspaces.path, Path(state_dir) / 'reports')
+    if state_dir is not None and native_token and (bind!='127.0.0.1' or public_origin):
+        server.server_close()
+        raise ValueError('原生工作区只能监听本机。')
+    server._resources_lock=threading.RLock()
+    server._closed_resources=set()
+    try:
+        server.jobs = Jobs(state_dir=state_dir if state_dir is not None and native_token else None)
+        from .batches import Batches
+        server.batches = Batches(server.jobs, server.voice_catalog["voices"])
+        server.workspaces = None
+        server.reports = None
+        server.audio_captures = None
+        server.native_access = None
+        server.workspace_access = None
+        server.native_token = None
+        if state_dir is not None and native_token:
+            from native_workspace import NativeWorkspaceAccess
+            from .workspaces import Workspaces
+            server.native_token = native_token
+            server.native_access = NativeWorkspaceAccess(state_dir)
+            server.workspace_access = server.native_access
+            server.workspaces = Workspaces(state_dir, server.jobs, server.native_access, server.voice_catalog)
+            from .workspace_reports import WorkspaceReports
+            server.reports = WorkspaceReports(server.workspaces.path, Path(state_dir) / 'reports')
+            from native_audio import NativeAudioCaptures
+            server.audio_captures = NativeAudioCaptures(state_dir,server.native_access)
+    except BaseException:
+        close_resources(server)
+        server.server_close()
+        raise
     return server
 
 
@@ -508,10 +359,8 @@ def main():
         pass
     finally:
         server.server_close()
-        try:
-            if server.reports is not None: server.reports.close()
-        finally:
-            server.jobs.close()
+        close_resources(server)
+
 
 
 if __name__ == "__main__":

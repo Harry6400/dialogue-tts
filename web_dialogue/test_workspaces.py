@@ -10,7 +10,7 @@ import urllib.request
 from unittest.mock import patch
 
 from native_workspace import NativeWorkspaceAccess
-from .app import Jobs, make_server
+from .app import Jobs, make_server, close_resources
 from .normalize import InputError
 from .test_batch_import import xml
 from .workspaces import Workspaces
@@ -224,7 +224,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_active_legacy_job_does_not_get_replaced(self):
         self.pair('001');ident=self.import_ready()
         selection=self.work.select(ident,{'mode':'all'})
-        with patch.object(self.jobs,'items',{'fictional-active':{}}),patch.object(self.jobs,'snapshot',return_value={'status':'running'}):
+        with patch.object(self.jobs,'has_running',return_value=True):
             with self.assertRaises(InputError):
                 self.work.start(ident,{'selection_id':selection['selection_id'],'output_folder_id':self.target['folder_id'],
                                        'consent':True,'request_id':'exclusive-request'})
@@ -547,7 +547,7 @@ class WorkspaceHTTPTests(unittest.TestCase):
                 with patch.object(server.workspaces,'safety',side_effect=OSError('fictional storage failure')):
                     self.assertTrue(get()['unknown'])
             finally:
-                server.shutdown();server.server_close();server.jobs.close();server.native_access.close();thread.join(3)
+                server.shutdown();server.server_close();close_resources(server);thread.join(3)
 
     def test_native_token_never_replaced_by_browser_token(self):
         with tempfile.TemporaryDirectory() as root:
@@ -570,7 +570,7 @@ class WorkspaceHTTPTests(unittest.TestCase):
                 result=request('/api/workspaces/import',{'input_folder_id':grant['folder_id']},{'X-App-Token':server.token})
                 self.assertIn('id',result)
             finally:
-                server.shutdown();server.server_close();server.jobs.close();server.native_access.close();thread.join(3)
+                server.shutdown();server.server_close();close_resources(server);thread.join(3)
 
 
 if __name__=='__main__':unittest.main()

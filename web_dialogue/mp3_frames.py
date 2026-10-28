@@ -2,6 +2,10 @@
 No decoder, external backend, local model or FFmpeg binary is required.
 The Edge service format must stay MPEG2 Layer III, mono 24 kHz / 48 kbit/s.
 """
+import hashlib
+import os
+import stat
+
 def parse_frames(data):
  """Strict fixed-format MPEG2 Layer III parser. Reject format drift, don't guess."""
  start=0
@@ -54,3 +58,46 @@ def join_segments(parts, pauses, silence_data):
         frame_count += len(frames)
         spans.append((start_ms, frame_count * FRAME_MS))
     return bytes(output), spans, frame_count * FRAME_MS
+
+
+def validated_file_digest(path):
+    """Validate one bounded MP3 and hash through the same no-follow fd.
+
+    Unlike parse_frames this keeps neither the complete file nor its frames
+    in RAM. It accepts exactly the existing fixed service MP3 format.
+    """
+    before=path.lstat()
+    descriptor=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_BINARY',0))
+    with os.fdopen(descriptor,'rb') as handle:
+        info=os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or (info.st_dev,info.st_ino)!=(before.st_dev,before.st_ino) or not 0<info.st_size<=256*1024*1024:
+            raise ValueError('缓存文件类型或大小无效。')
+        prefix=handle.read(10)
+        start=0
+        if prefix[:3]==b'ID3':
+            if len(prefix)<10:raise ValueError('缓存标签不完整。')
+            start=10+sum((prefix[6+i]&127)<<(21-7*i) for i in range(4))
+            if start>info.st_size:raise ValueError('缓存标签越界。')
+        handle.seek(start)
+        frames=0
+        while start<info.st_size:
+            header=handle.read(4)
+            if header[:3]==b'TAG' and info.st_size-start==128:
+                if len(handle.read(124))!=124:raise ValueError('缓存标签不完整。')
+                start=info.st_size;break
+            if len(header)!=4:raise ValueError('缓存帧不完整。')
+            word=int.from_bytes(header,'big')
+            if word>>21!=0x7ff or (word>>19)&3!=2 or (word>>17)&3!=1 or (word>>12)&15!=6 or (word>>10)&3!=1 or (word>>6)&3!=3:
+                raise ValueError('缓存音频格式无效。')
+            size=144+((word>>9)&1)
+            body=handle.read(size-4)
+            if len(body)!=size-4:raise ValueError('缓存音频截断。')
+            if not any(tag in body[:36] for tag in (b'Xing',b'Info',b'VBRI')):frames+=1
+            start+=size
+        if not frames:raise ValueError('缓存没有有效音频。')
+        handle.seek(0);digest=hashlib.sha256()
+        for block in iter(lambda:handle.read(65536),b''):digest.update(block)
+        after=os.fstat(handle.fileno())
+        if (after.st_size,after.st_mtime_ns,after.st_ctime_ns)!=(info.st_size,info.st_mtime_ns,info.st_ctime_ns):
+            raise ValueError('核验期间缓存已变化。')
+        return info.st_size,digest.hexdigest()

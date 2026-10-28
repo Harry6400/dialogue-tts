@@ -4,13 +4,21 @@ from web_dialogue.safe_updater import UpdateError
 from web_dialogue.updater_bridge import Updater
 from web_dialogue.updater_cli import state_directory
 from native_close import workspace_safety
+from native_windows_contracts import LockPort, ServicePort, UpdaterPort, WindowPort
 
 class NativeUpdaterMixin:
-    def _setup_updater(self, server):
+    _window: WindowPort | None = None
+    _update_server: ServicePort | None = None
+    _updater: UpdaterPort | None = None
+    _update_gate: LockPort | None = None
+    _lock: LockPort
+    _folder_lock: LockPort
+
+    def _setup_updater(self, server: ServicePort):
         from web_dialogue.updates import CURRENT_VERSION
         self._update_server=server
         self._updater=Updater(sys.executable,CURRENT_VERSION,state_directory()) if getattr(sys,'frozen',False) else None
-        self._update_gate=threading.Lock()
+        if self._update_gate is None:self._update_gate=threading.Lock()
 
     def check_for_update(self):
         try:
@@ -19,7 +27,7 @@ class NativeUpdaterMixin:
         except Exception:return {'state':'error','message':'检查更新失败，请稍后重试'}
 
     def install_update(self):
-        if not self._updater or not self._update_gate.acquire(False):return {'state':'error','message':'更新尚未就绪'}
+        if self._update_server is None or self._window is None or not self._updater or self._update_gate is None or not self._update_gate.acquire(False):return {'state':'error','message':'更新尚未就绪'}
         export_lock=False;save_lock=False;gated=False
         try:
             # Both native locks remain held until shutdown or a cancelled update.
@@ -33,8 +41,10 @@ class NativeUpdaterMixin:
             with server.update_lock:
                 backend=workspace_safety(server)
                 if backend is None or any(backend.values()):raise UpdateError('后台工作区仍有任务、保存或未保存音频，请先处理后再更新')
-                with server.jobs.lock,server.batches.lock:
-                    if any(item['process'].poll() is None for item in server.jobs.items.values()) or server.batches.active:raise UpdateError('合成任务尚未结束')
+                with server.jobs.transaction(),server.batches.transaction():
+                    job_running,batch_running=server.jobs.has_running(),server.batches.has_running()
+                    if type(job_running) is not bool or type(batch_running) is not bool:raise UpdateError('无法确认合成任务状态')
+                    if job_running or batch_running:raise UpdateError('合成任务尚未结束')
                 server.update_in_progress=True;gated=True
             self._window.evaluate_js('window.dialogueUpdateLock(true)')
             version=self._updater.offer.get('version') if self._updater.offer else ''

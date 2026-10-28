@@ -2,9 +2,9 @@
 def workspace_safety(server):
     """Read every workspace; an unavailable/malformed manager is never idle."""
     from web_dialogue.runtime_safety import combined_safety
-    state = combined_safety(getattr(server, 'workspaces', None), getattr(server, 'reports', None))
+    state = combined_safety(getattr(server, 'workspaces', None), getattr(server, 'reports', None), getattr(server,'audio_captures',None),getattr(server,'jobs',None))
     if state.get('unknown') is True: return None
-    return {key: state[key] for key in ('busy', 'unsaved', 'saving', 'pending')}
+    return {key: state[key] for key in ('busy', 'unsaved', 'saving', 'pending','legacy_unsaved')}
 
 
 def merge_close_safety(page, backend):
@@ -12,8 +12,11 @@ def merge_close_safety(page, backend):
         return None
     if not isinstance(backend, dict) or any(type(backend.get(k)) is not bool for k in ('busy', 'unsaved', 'saving', 'pending')):
         return None
+    if 'legacy_unsaved' in backend and type(backend['legacy_unsaved']) is not bool:
+        return None
     return {**page, 'running': page['running'] or backend['busy'],
             'saving': page['saving'] or backend['saving'], 'pending': page['pending'] or backend['pending'],
+            'unsaved':page['unsaved'] or backend.get('legacy_unsaved') is True,
             # Page unsaved retains legacy manual-save protection; durable workspace
             # audio requires a preserve-and-exit confirmation, never a discard prompt.
             'persistent_unsaved': backend['unsaved'],

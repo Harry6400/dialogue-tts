@@ -1,4 +1,6 @@
 from pathlib import Path
+import hashlib
+import subprocess
 import tempfile
 import threading
 import time
@@ -6,25 +8,37 @@ import unittest
 from unittest.mock import patch
 import zipfile
 from .batches import Batches
+from .jobs import Jobs, ResultLease
 from .normalize import InputError
 from .test_batch_import import xml, f
 
-class FakeJobs:
+class FakeJobs(Jobs):
     def __init__(self):
-        self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
-        self.lock=threading.RLock(); self.items={}; self.calls=[]; self.fail={'bad'}; self.wait=False
-    def start(self, script, batch_owner=None, fingerprint=None, filename=None):
-        ident=str(len(self.calls)); text=script['lines'][0]['text']; self.calls.append(text)
+        super().__init__()
+        self.calls=[];self.fail={'bad'};self.wait=False
+    def start(self,script,batch_owner=None,fingerprint=None,filename=None):
+        self.ensure_available(batch_owner)
+        ident=str(len(self.calls));text=script['lines'][0]['text'];self.calls.append(text)
         folder=self.root/ident;folder.mkdir();(folder/'dialogue.mp3').write_bytes(b'fake-mp3')
-        self.items[ident]={'folder':folder,'status':'running' if self.wait else ('error' if text in self.fail else 'done')}
+        owner=self
+        class Process:
+            def poll(self):return None if owner.items[ident]['status']=='running' else 0
+            def wait(self,timeout=None):
+                if self.poll() is None:raise subprocess.TimeoutExpired('fake',timeout)
+                return 0
+        self.items[ident]={'folder':folder,'status':'running' if self.wait else ('error' if text in self.fail else 'done'),
+                           'process':Process(),'leases':0,'timer':None,'persistent':False,'filename':filename,'fingerprint':fingerprint}
         return {'id':ident}
-    def snapshot(self, ident):
-        return {'id':ident,'status':self.items[ident]['status'],'completed':1,'total':1}
-    def cancel(self, ident): self.items[ident]['status']='cancelled'
+    def snapshot(self,ident):return {'id':ident,'status':self.items[ident]['status'],'completed':1,'total':1}
+    def cancel(self,ident):self.items[ident]['status']='cancelled';return self.snapshot(ident)
+    def result_available(self,ident):return self.items[ident]['status']=='done'
+    def open_result(self,ident,kind='audio',recovery=False):
+        item=self.items[ident];handle=(item['folder']/'dialogue.mp3').open('rb');item['leases']+=1
+        return ResultLease(self,ident,handle,8,item['filename'],item['fingerprint'],hashlib.sha256(b'fake-mp3').hexdigest(),item['folder']/'dialogue.mp3')
 
 class BatchTests(unittest.TestCase):
     def setUp(self): self.jobs=FakeJobs(); self.b=Batches(self.jobs)
-    def tearDown(self): self.b.close();self.jobs.temp.cleanup()
+    def tearDown(self): self.b.close();self.jobs.close()
     def payload(self, texts=('good','bad')):
         return {'files':[f(xml(role, ref=f'fictional-{i}', text=t if role=='AGENT' else '答复'), f'{i+1:03d}{0 if role=="AGENT" else 1}.xml') for i,t in enumerate(texts) for role in ('AGENT','USER')], 'consent':True,'request_id':'request-123'}
     def finish(self, ident):
@@ -90,15 +104,16 @@ class BatchTests(unittest.TestCase):
             with zipfile.ZipFile(new) as z:self.assertEqual(len(z.namelist()),2)
         handle.close()
 
-    def test_windows_locked_retirement_bounded(self):
-        with patch('web_dialogue.batches.shutil.rmtree',side_effect=PermissionError('locked')):
-            for i in range(10):
-                p=self.payload(('good',));p['request_id']=f'request-{i:03d}'
-                self.finish(self.b.start(p)['id'])
-            self.assertEqual(len(self.b.items),5);self.assertEqual(len(self.b.retired),5)
-            p=self.payload(('good',));p['request_id']='request-over-limit'
-            with self.assertRaises(InputError):self.b.start(p)
-        self.b._reap_retired();self.assertFalse(self.b.retired)
+    def test_full_results_are_not_automatically_retired_at_capacity(self):
+        ids=[]
+        for index in range(5):
+            payload=self.payload(('good',));payload['request_id']=f'request-{index:03d}'
+            ident=self.b.start(payload)['id'];self.finish(ident);ids.append(ident)
+        payload=self.payload(('good',));payload['request_id']='request-over-limit'
+        with self.assertRaises(InputError):self.b.start(payload)
+        self.assertTrue(all(self.b.output(ident,'001').read_bytes()==b'fake-mp3' for ident in ids))
+        self.b.release(ids[0])
+        self.finish(self.b.start(payload)['id'])
 
     def test_zip_generations_bounded_while_downloads_open(self):
         ident=self.b.start(self.payload())['id'];self.finish(ident);handles=[]
@@ -119,6 +134,7 @@ class BatchTests(unittest.TestCase):
         p=self.payload(('good',));p['request_id']='request-new-batch'
         with self.assertRaises(InputError):self.b.start(p)
         for handle in leases:handle.close()
+        self.b.release(next(iter(self.b.items)))
         self.finish(self.b.start(p)['id'])
 
     def test_excluded_group_preserves_public_number_and_filename(self):

@@ -15,7 +15,7 @@ def main():
     from pathlib import Path
     from web_dialogue.install_lock import InstallationLease
     installation_lease=InstallationLease(Path(sys.executable).parents[2]).acquire() if getattr(sys,"frozen",False) else None
-    from web_dialogue.app import make_server
+    from web_dialogue.app import make_server, close_resources
     from web_dialogue.verification_profile import verification_root
     state_dir = verification_root() or Path.home() / 'Library' / 'Application Support' / 'DialogueTTS'
     native_token = os.environ.pop('DIALOGUE_NATIVE_TOKEN', None)
@@ -36,12 +36,9 @@ def main():
         server.serve_forever()
     finally:
         server.server_close()
-        try:
-            if getattr(server, 'reports', None): server.reports.close()
-        except (OSError, ValueError):
-            pass  # Derived CSV cache can be regenerated; audio cleanup still runs.
-        if getattr(server, 'workspaces', None): server.workspaces.close()
-        server.jobs.close()
+        cleanup=close_resources(server)
+        if not cleanup['ok']:
+            print('资源关闭未完成；已保留持久缓存：'+','.join(cleanup['errors']),file=sys.stderr,flush=True)
         if installation_lease: installation_lease.close()
 
 

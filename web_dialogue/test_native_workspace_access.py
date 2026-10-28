@@ -187,7 +187,7 @@ class NativeWorkspaceBridgeTests(unittest.TestCase):
             self.assertFalse((root / 'state').exists())
 
     def test_private_token_registration_and_native_directory_choice_never_scan(self):
-        from .app import make_server
+        from .app import make_server, close_resources
         from windows_launcher import NativeDownloads
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); source = root / 'input'; source.mkdir(); output = root / 'output'; output.mkdir()
@@ -216,7 +216,7 @@ class NativeWorkspaceBridgeTests(unittest.TestCase):
                 with urllib.request.urlopen(base + '/api/config') as response: config = json.load(response)
                 self.assertNotIn(secret, json.dumps(config))
             finally:
-                server.shutdown(); server.server_close(); server.workspaces.close(); server.jobs.close(); server.native_access.close()
+                server.shutdown(); server.server_close(); close_resources(server)
 
 
 if __name__ == '__main__': unittest.main()

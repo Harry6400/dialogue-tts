@@ -12,6 +12,7 @@ import threading
 import urllib.request
 import uuid
 from web_dialogue.output_names import valid_output_name
+from native_windows_contracts import WindowPort
 
 MAX_AUDIO = 256 * 1024 * 1024
 VOICES = {'zh-CN-XiaoxiaoNeural','zh-CN-XiaoyiNeural','zh-CN-YunxiNeural','zh-CN-YunjianNeural','zh-CN-YunxiaNeural','zh-CN-YunyangNeural'}
@@ -44,8 +45,10 @@ def _read_regular(path, maximum):
 
 
 class NativeFolderMixin:
+    _window: WindowPort | None
+
     def _setup_folders(self, storage=None):
-        self._folder_lock = threading.RLock()
+        if not hasattr(self, '_folder_lock'): self._folder_lock = threading.RLock()
         self._caps = {}
         self._selected = {'input': None, 'output': None}
         self._prefs = {'voices': {}, 'rate': 1, 'pause_ms': 250, 'theme': 'light', 'auto_voice': True, 'manual_user_voice': False, 'paths': {}, 'receipts': {}, 'exports': {}}
@@ -124,9 +127,13 @@ class NativeFolderMixin:
             if not isinstance(result, dict) or result.get('ok') is False: raise ValueError('原生目录授权失败')
             return result
 
+    def _require_window(self):
+        if self._window is None: raise ValueError('应用窗口尚未就绪')
+        return self._window
+
     def _choose_workspace(self, kind):
         import webview
-        choice = self._window.create_file_dialog(webview.FileDialog.FOLDER)
+        choice = self._require_window().create_file_dialog(webview.FileDialog.FOLDER)
         if not choice: return {'cancelled': True}
         result = self._native_workspace_request('/api/native/folders', {'kind': kind, 'path': str(Path(choice[0]).absolute())})
         return {'ok': True, **result}
@@ -201,9 +208,23 @@ class NativeFolderMixin:
             return {'ok': True}
         except (OSError, ValueError, TypeError): return {'ok':False, 'error':'设置未能保存'}
 
+    def set_application_preferences(self, values):
+        try:
+            if not isinstance(values,dict) or set(values)!={'theme'} or values['theme'] not in ('light','dark'):
+                raise ValueError('应用设置无效')
+            with self._folder_lock:
+                previous=self._prefs['theme']
+                self._prefs['theme']=values['theme']
+                try:self._persist()
+                except BaseException:
+                    self._prefs['theme']=previous
+                    raise
+            return {'ok':True}
+        except (OSError,ValueError,TypeError):return {'ok':False,'error':'应用设置保存失败'}
+
     def _choose(self, kind):
         import webview
-        choice = self._window.create_file_dialog(webview.FileDialog.FOLDER)
+        choice = self._require_window().create_file_dialog(webview.FileDialog.FOLDER)
         if not choice: return {'cancelled': True}
         with self._folder_lock:
             record = self._authorize(Path(choice[0]), kind)

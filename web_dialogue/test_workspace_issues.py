@@ -10,15 +10,15 @@ import urllib.request
 from unittest.mock import patch
 
 from native_workspace import NativeWorkspaceAccess
-from .app import make_server
+from .jobs import Jobs
+from .app import make_server, close_resources
 from .normalize import InputError
 from .workspace_issues import ISSUE_KEYS, issue_counts
 from .workspaces import DEFAULT_SETTINGS, Workspaces
 
 
-class OfflineJobs:
-    batch_active = None
-    items = {}
+class OfflineJobs(Jobs):
+    def start(self,*args,**kwargs):raise AssertionError('Online workers are forbidden in offline verification')
 
 
 def seed_workspace(work, access, root):
@@ -46,7 +46,7 @@ class WorkspaceIssueTests(unittest.TestCase):
         self.ident = seed_workspace(self.work, self.access, self.root)
 
     def tearDown(self):
-        self.work.close(); self.access.close(); self.temp.cleanup()
+        self.work.close(); self.work.jobs.close(); self.access.close(); self.temp.cleanup()
 
     def test_counts_use_real_codes_and_exclude_pending_audio_and_workspace_phases(self):
         categories = {
@@ -146,7 +146,7 @@ class WorkspaceIssueTests(unittest.TestCase):
         with self.work.db() as db:
             db.execute("UPDATE items SET status='changed',error_code='input_changed' WHERE id='item-000'")
             insert_items(db, self.ident, [('late-member', 'entry-0999.mp3', 'ready', None, None)])
-        self.work.close()
+        self.work.close();self.work.jobs.close()
         self.work = Workspaces(self.state, OfflineJobs(), self.access)
         summary = self.work.summary(self.ident)
         self.assertEqual(summary['selected'], 100)
@@ -202,4 +202,4 @@ class WorkspaceIssueHTTPTests(unittest.TestCase):
                     with self.subTest(path=path): self.assertEqual(request(path)[0], 400)
                 self.assertEqual(request('/selection', {'mode': 'all', 'issue': 'unknown'})[0], 400)
             finally:
-                server.shutdown(); server.server_close(); server.workspaces.close(); server.jobs.close(); server.native_access.close(); thread.join(3)
+                server.shutdown(); server.server_close(); close_resources(server); thread.join(3)

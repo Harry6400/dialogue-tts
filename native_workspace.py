@@ -308,13 +308,17 @@ class NativeWorkspaceAccess:
         """Fault-injection seam for crash recovery tests; never exposed to JS."""
 
     @_storage_errors
-    def save_audio(self, folder_id, source, filename, fingerprint):
+    def save_audio(self, folder_id, source, filename, fingerprint, *, expected_size=None, expected_sha256=None):
         filename = _name(filename); fingerprint = _fingerprint(fingerprint)
         with self._lock:
             prior = self.verify_output(folder_id, filename, fingerprint)
             if prior['state'] == 'saved': return prior
             if prior['state'] == 'conflict': raise FileExistsError(prior['error'])
             data = self._read(Path(source), MAX_AUDIO)
+            if expected_size is not None and (type(expected_size) is not int or len(data) != expected_size):
+                raise ValueError('音频缓存长度已变化')
+            if expected_sha256 is not None and (not isinstance(expected_sha256,str) or not FP.fullmatch(expected_sha256) or hashlib.sha256(data).hexdigest() != expected_sha256):
+                raise ValueError('音频缓存摘要已变化')
             from web_dialogue.mp3_frames import parse_frames
             if not parse_frames(data): raise ValueError('音频为空')
             digest = hashlib.sha256(data).hexdigest()

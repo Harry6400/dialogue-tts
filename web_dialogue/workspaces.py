@@ -20,12 +20,15 @@ from contextlib import contextmanager, nullcontext
 
 from .batch_import import _metadata
 from .normalize import InputError, VOICES
+from .mp3_frames import validated_file_digest
 from .output_names import pair_filename, valid_output_name
 from .workspace_issues import ERROR_STATUSES, ERROR_WHERE, issue_counts, issue_where, normalize_issue
 
 DEFAULT_SETTINGS = {'voices': {'AGENT': VOICES[0]['id'], 'USER': VOICES[1]['id']},
                     'rate': 1, 'pause_ms': 250, 'auto_voice': True, 'manual_user_voice': False}
 ACTIVE = {'running', 'pausing'}
+WORKSPACE_STATUSES = frozenset({'scanning','ready','running','pausing','paused','interrupted','done','cancelled','error'})
+RECOVERY_PHASES = frozenset({'recovery_settings','recovery_checking','recovery_scan'})
 FILTERS = {'all': '1', 'ready': "status='ready'", 'pending': "status='ready'",
            'running': "status IN ('queued','running','saving','save_pending')", 'processing': "status IN ('queued','running','saving','save_pending')",
            'error': ERROR_WHERE,
@@ -47,7 +50,11 @@ class Workspaces:
         self.lock = threading.RLock()
         self.cache_lock = threading.RLock()
         self.cache_checks = {}
+        self._recovery_lock = threading.RLock()
+        self._cache_facts = {'protected':0,'unknown':0,'by_workspace':{}}
+        self._source_facts = {'protected':0,'unknown':0,'by_workspace':{}}
         self.stop = threading.Event()
+        self._closed = False
         self.threads = {}
         self.scan_cancel = {}
         self.active = None
@@ -84,8 +91,9 @@ class Workspaces:
             if 'source_name' not in {r[1] for r in db.execute('PRAGMA table_info(items)')}:
                 db.execute('ALTER TABLE items ADD COLUMN source_name TEXT')
             item_columns={r[1] for r in db.execute('PRAGMA table_info(items)')}
-            for column,kind in (('audio_hash','TEXT'),('audio_size','INTEGER')):
+            for column,kind in (('audio_hash','TEXT'),('audio_size','INTEGER'),('pending_job','TEXT')):
                 if column not in item_columns:db.execute('ALTER TABLE items ADD COLUMN '+column+' '+kind)
+            db.execute('CREATE INDEX IF NOT EXISTS item_worker_source ON items(pending_job) WHERE pending_job IS NOT NULL')
             workspace_columns={r[1] for r in db.execute('PRAGMA table_info(workspaces)')}
             for column in ('input_path','output_path','selection_query'):
                 if column not in workspace_columns:db.execute('ALTER TABLE workspaces ADD COLUMN '+column+' TEXT')
@@ -95,7 +103,7 @@ class Workspaces:
             db.execute("UPDATE items SET status='save_pending' WHERE status='saving'")
             db.execute("UPDATE items SET status='unverified' WHERE status='saved'")
         os.chmod(self.path, 0o600)
-        self._reconcile_cache()
+        self.reconcile()
 
     @contextmanager
     def db(self):
@@ -116,6 +124,9 @@ class Workspaces:
         return row
 
     def _bump(self, db, ident, **fields):
+        """Single indexed state-write boundary; the caller owns its transaction."""
+        if 'status' in fields and fields['status'] not in WORKSPACE_STATUSES:
+            raise InputError('工作区状态无效。')
         fields['revision'] = self._ws(db, ident)['revision'] + 1
         db.execute('UPDATE workspaces SET ' + ','.join(k + '=?' for k in fields) + ' WHERE id=?',
                    (*fields.values(), ident))
@@ -130,7 +141,12 @@ class Workspaces:
             return {'folder_id': ident, 'path': label or '', 'valid': False}
 
     def summary(self, ident):
-        cache_facts=self._reconcile_cache()
+        self.reconcile()
+        return self.query_summary(ident)
+
+    def query_summary(self, ident):
+        """Indexed projection; callers explicitly request actual reconciliation."""
+        cache_facts=self._combined_cache_facts()
         with self.db() as db:
             db.execute('BEGIN')
             row = self._ws(db, ident)
@@ -144,7 +160,7 @@ class Workspaces:
                       settings=json.loads(row['settings']), input_folder=self._grant(row['input_id'],'input',row['input_path']),
                       output_folder=self._grant(row['output_id'],'output',row['output_path']),
                       active_item=json.loads(row['active_item']) if row['active_item'] else None)
-        result['can_edit'] = bool(result['input_folder'] and result['input_folder']['valid']) and row['status'] not in ACTIVE | {'scanning'} and row['phase'] not in {'recovery_settings','recovery_checking','recovery_scan'} and not (row['run_settings'] and row['status'] in {'paused','interrupted'})
+        result['can_edit'] = bool(result['input_folder'] and result['input_folder']['valid']) and row['status'] not in ACTIVE | {'scanning'} and row['phase'] not in RECOVERY_PHASES and not (row['run_settings'] and row['status'] in {'paused','interrupted'})
         result['has_run_plan'] = bool(row['run_settings'])
         result['save_error'] = counts.get('save_error',0)
         result['synthesis_error'] = counts.get('synthesis_error',0)
@@ -156,48 +172,86 @@ class Workspaces:
         result['unsaved_audio_count'] = cache_facts['by_workspace'].get(ident,0)
         return result
 
-    @staticmethod
-    def _cache_digest(path):
-        """Validate one bounded MP3 and hash through the same no-follow fd.
+    _cache_digest = staticmethod(validated_file_digest)
 
-        Unlike parse_frames this keeps neither the complete file nor its frames
-        in RAM. It accepts exactly the existing fixed service MP3 format.
-        """
-        before=path.lstat()
-        descriptor=os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_BINARY',0))
-        with os.fdopen(descriptor,'rb') as handle:
-            info=os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode) or (info.st_dev,info.st_ino)!=(before.st_dev,before.st_ino) or not 0<info.st_size<=256*1024*1024:
-                raise ValueError('缓存文件类型或大小无效。')
-            prefix=handle.read(10)
-            start=0
-            if prefix[:3]==b'ID3':
-                if len(prefix)<10:raise ValueError('缓存标签不完整。')
-                start=10+sum((prefix[6+i]&127)<<(21-7*i) for i in range(4))
-                if start>info.st_size:raise ValueError('缓存标签越界。')
-            handle.seek(start)
-            frames=0
-            while start<info.st_size:
-                header=handle.read(4)
-                if header[:3]==b'TAG' and info.st_size-start==128:
-                    if len(handle.read(124))!=124:raise ValueError('缓存标签不完整。')
-                    start=info.st_size;break
-                if len(header)!=4:raise ValueError('缓存帧不完整。')
-                word=int.from_bytes(header,'big')
-                if word>>21!=0x7ff or (word>>19)&3!=2 or (word>>17)&3!=1 or (word>>12)&15!=6 or (word>>10)&3!=1 or (word>>6)&3!=3:
-                    raise ValueError('缓存音频格式无效。')
-                size=144+((word>>9)&1)
-                body=handle.read(size-4)
-                if len(body)!=size-4:raise ValueError('缓存音频截断。')
-                if not any(tag in body[:36] for tag in (b'Xing',b'Info',b'VBRI')):frames+=1
-                start+=size
-            if not frames:raise ValueError('缓存没有有效音频。')
-            handle.seek(0);digest=hashlib.sha256()
-            for block in iter(lambda:handle.read(65536),b''):digest.update(block)
-            after=os.fstat(handle.fileno())
-            if (after.st_size,after.st_mtime_ns,after.st_ctime_ns)!=(info.st_size,info.st_mtime_ns,info.st_ctime_ns):
-                raise ValueError('核验期间缓存已变化。')
-            return info.st_size,digest.hexdigest()
+    def _combined_cache_facts(self):
+        by_workspace=dict(self._cache_facts['by_workspace'])
+        for ident,count in self._source_facts['by_workspace'].items():
+            by_workspace[ident]=by_workspace.get(ident,0)+count
+        return {'protected':self._cache_facts['protected']+self._source_facts['protected'],
+                'unknown':self._cache_facts['unknown']+self._source_facts['unknown'], 'by_workspace':by_workspace}
+
+    def reconcile(self):
+        """Check complete worker sources and cache files without reading XML."""
+        with self._recovery_lock:
+            self._reconcile_worker_results()
+            self._cache_facts=self._reconcile_cache()
+            return self._combined_cache_facts()
+
+    def _reconcile_worker_results(self):
+        pending=self.jobs.recovery_safety()
+        # A worker that exited without a full MP3 can be regenerated only after
+        # the user resumes; an absent source must not masquerade as saved audio.
+        with self.db() as db:
+            for row in db.execute('SELECT wid,id,pending_job FROM items WHERE pending_job IS NOT NULL'):
+                if not self.jobs.is_known(row['pending_job']):
+                    db.execute('UPDATE items SET pending_job=NULL WHERE id=?',(row['id'],))
+        facts={'protected':pending['unknown_count'],'unknown':pending['unknown_count'],'by_workspace':{}}
+        for result in pending['results']:
+            context=result['context']
+            if not isinstance(context,dict):
+                facts['protected']+=1;facts['unknown']+=1;continue
+            ident,item_id=context['workspace_id'],context['item_id']
+            if self.active==ident and self.active_job==result['id']:
+                continue
+            valid=False
+            try:
+                with self.db() as db:
+                    ws=self._ws(db,ident)
+                    row=db.execute('SELECT * FROM items WHERE wid=? AND id=?',(ident,item_id)).fetchone()
+                    valid=bool(row and row['planned'] and ws['run_settings'] and row['fingerprint']==result['fingerprint'] and row['filename']==result['filename'] and row['status'] not in {'invalid','changed','conflict'})
+                    if not valid:raise ValueError('worker binding changed')
+                    if row['status']=='saved':
+                        receipt=self.access.verify_output(row['saved_folder_id'] or ws['output_id'],row['filename'],row['fingerprint'])
+                        if receipt['state']=='saved' and receipt['size']==result['size'] and receipt['sha256']==result['sha256']:
+                            self.jobs.release(result['id']);continue
+                self._adopt_worker_result(ident,item_id,result)
+                continue
+            except (ValueError,OSError,KeyError):
+                facts['protected']+=1
+                facts['by_workspace'][ident]=facts['by_workspace'].get(ident,0)+1
+                if not valid:
+                    facts['unknown']+=1;continue
+                try:
+                    with self.db() as db:
+                        current=db.execute('SELECT status,pending_job FROM items WHERE wid=? AND id=?',(ident,item_id)).fetchone()
+                        if current['status']!='save_error' or current['pending_job']!=result['id']:
+                            self._update_item(db,ident,item_id,status='save_error',pending_job=result['id'],error='完整合成源已保留；缓存写入未完成，请恢复空间或权限后重试保存。',error_code='save_failed')
+                except (ValueError,OSError,sqlite3.Error):facts['unknown']+=1
+        self._source_facts=facts
+
+    def _adopt_worker_result(self,ident,item_id,result):
+        cache=self._audio_path(ident,item_id)
+        staging=cache.with_suffix('.worker.tmp')
+        with self.cache_lock:
+            if cache.exists():
+                if self._cache_digest(cache)!=(result['size'],result['sha256']):raise ValueError('existing cache differs')
+            else:
+                try:
+                    with self.jobs.open_result(result['id'],recovery=True) as source,open(staging,'wb') as output:
+                        digest=hashlib.sha256();size=0
+                        for block in iter(lambda:source.read(65536),b''):
+                            size+=len(block);digest.update(block);output.write(block)
+                        output.flush();os.fsync(output.fileno())
+                    if size!=result['size'] or digest.hexdigest()!=result['sha256']:raise ValueError('worker source changed')
+                    os.replace(staging,cache)
+                    self._sync_cache()
+                    self._after_cache_publish(ident,item_id)
+                finally:staging.unlink(missing_ok=True)
+            if self._cache_digest(cache)!=(result['size'],result['sha256']):raise ValueError('published cache differs')
+            with self.db() as db:
+                self._update_item(db,ident,item_id,status='save_pending',pending_job=None,audio_hash=result['sha256'],audio_size=result['size'],error=None,error_code=None)
+        self.jobs.release(result['id'])
 
     def _reconcile_cache(self):
         """Use published cache facts, never database status alone, for protection.
@@ -258,7 +312,7 @@ class Workspaces:
     def list(self):
         with self.db() as db:
             ids = [r[0] for r in db.execute('SELECT id FROM workspaces ORDER BY created DESC LIMIT 100')]
-        return {'workspaces': [self.summary(i) for i in ids]}
+        return {'workspaces': [self.query_summary(i) for i in ids]}
 
     def import_folder(self, input_id):
         directory=self.access.directory(input_id, 'input')
@@ -343,7 +397,7 @@ class Workspaces:
                 self._bump(db,ident,status='error',phase='scan_error',message='扫描失败，请核对目录权限和可用空间后重新导入。')
 
     def _preview(self, db, ident, item_id, settings=None, override_marker=False, override=None):
-        from .app import normalize_source
+        from .source_processing import normalize_source
         ws = self._ws(db,ident)
         item = db.execute('SELECT * FROM items WHERE wid=? AND id=?',(ident,item_id)).fetchone()
         if item is None:
@@ -379,7 +433,7 @@ class Workspaces:
     def _item(row):
         result = {k:row[k] for k in ('id','filename','status','error','error_code','customer_voice','voice_source','line_count')}
         result['selected'] = bool(row['selected'])
-        result['has_audio'] = row['status'] in {'saved','save_error','saving','save_pending'}
+        result['has_audio'] = row['status'] in {'saved','save_error','saving','save_pending'} and not row['pending_job']
         result['source_name'] = row['source_name']
         return result
 
@@ -400,7 +454,7 @@ class Workspaces:
             rows = db.execute('SELECT * FROM items WHERE wid=? AND '+where+' ORDER BY filename IS NULL,filename,id LIMIT ? OFFSET ?',
                               (ident,*args,limit,(page-1)*limit)).fetchall()
             hidden = db.execute('SELECT count(*) FROM items WHERE wid=? AND selected=1 AND NOT ('+where+')',(ident,*args)).fetchone()[0]
-        return {**self.summary(ident),'items':[self._item(r) for r in rows], 'matched_total':total,'page':page,'page_size':limit,'selection_hidden_count':hidden,'issue':normalize_issue(issue)}
+        return {**self.query_summary(ident),'items':[self._item(r) for r in rows], 'matched_total':total,'page':page,'page_size':limit,'selection_hidden_count':hidden,'issue':normalize_issue(issue)}
 
     def next_issue(self, ident, q='', issue='', after_id=None, limit=100):
         if str(limit) != '100':raise InputError('异常定位每页固定为 100 条。')
@@ -450,11 +504,11 @@ class Workspaces:
         q,filter,issue=payload.get('q',''),payload.get('filter','all'),payload.get('issue','')
         where,args = self._where(q,filter,issue)
         query={'q':q,'filter':filter,'issue':normalize_issue(issue)}
-        with getattr(self.jobs,'lock',nullcontext()),self.lock,self.db() as db:
+        with self.jobs.transaction(),self.lock,self.db() as db:
             ws=self._ws(db,ident)
             if ws['status'] in ACTIVE or ws['status']=='scanning':
                 raise InputError('请在扫描完成、任务停止后调整选择。')
-            if ws['phase'] in {'recovery_settings','recovery_checking','recovery_scan'}:raise InputError('请先继续尚未完成的离线检查。')
+            if ws['phase'] in RECOVERY_PHASES:raise InputError('请先继续尚未完成的离线检查。')
             if ws['run_settings'] and ws['status'] in {'paused','interrupted'}:
                 raise InputError('请先继续或结束未完成任务，再改变选择。')
             mode=payload.get('mode')
@@ -480,14 +534,14 @@ class Workspaces:
         return {'selection_id':token,'count':count,'hidden_count':count-visible,'selection_query':query}
 
     def settings(self,ident,payload):
-        from .app import normalize_source
+        from .source_processing import normalize_source
         from .xml_example import XML_EXAMPLE
         with self.lock,self.db() as db:
             ws=self._ws(db,ident)
             try:self.access.directory(ws['input_id'],'input')
             except (ValueError,OSError):raise InputError('请先恢复来源文件夹访问，再修改声音设置。') from None
             if ws['status'] in ACTIVE or ws['status']=='scanning': raise InputError('请在任务停止后修改设置。')
-            if ws['phase'] in {'recovery_settings','recovery_checking','recovery_scan'}:raise InputError('请先继续尚未完成的离线检查。')
+            if ws['phase'] in RECOVERY_PHASES:raise InputError('请先继续尚未完成的离线检查。')
             if ws['run_settings'] and ws['status'] in {'paused','interrupted'}:
                 raise InputError('请先继续或结束未完成任务，再修改设置。')
             if payload.get('selection_id') or payload.get('item_id'):
@@ -538,8 +592,8 @@ class Workspaces:
         request=payload.get('request_id')
         if not isinstance(request,str) or not 8<=len(request)<=100: raise InputError('请求标识无效。')
         digest=hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()
-        cache_facts=self._reconcile_cache()
-        with getattr(self.jobs,'lock',nullcontext()),self.lock,self.db() as db:
+        cache_facts=self.reconcile()
+        with self.jobs.transaction(),self.lock,self.db() as db:
             ws=self._ws(db,ident)
             prior=db.execute('SELECT digest FROM requests WHERE wid=? AND request_id=?',(ident,request)).fetchone()
             if prior:
@@ -551,7 +605,7 @@ class Workspaces:
                 raise InputError('已有任务运行或扫描尚未完成。')
             if ws['run_settings'] and ws['status'] in {'paused','interrupted'}:
                 raise InputError('已有冻结计划，请继续或结束当前任务。')
-            if ws['phase'] in {'recovery_settings','recovery_checking','recovery_scan'}:raise InputError('离线检查尚未完成，不能生成。')
+            if ws['phase'] in RECOVERY_PHASES:raise InputError('离线检查尚未完成，不能生成。')
             if payload.get('selection_id')!=ws['selection_id']: raise InputError('选择已改变，请刷新后重试。')
             directory=self.access.directory(payload.get('output_folder_id'),'output')
             fd,probe=tempfile.mkstemp(prefix='.dialogue-check-',dir=directory)
@@ -570,15 +624,14 @@ class Workspaces:
 
     def _launch(self,ident,mode='all'):
         self._available()
+        self.jobs.claim_batch('workspace:'+ident)
         self.active=ident
-        self.jobs.batch_active='workspace:'+ident
         thread=self.threads[ident]=threading.Thread(target=self._run,args=(ident,mode),daemon=True)
         thread.start()
 
     def _available(self):
-        if self.active or getattr(self.jobs,'batch_active',None):raise InputError('已有任务正在运行，请先等待或暂停。')
-        for ident in getattr(self.jobs,'items',{}):
-            if self.jobs.snapshot(ident)['status'] in {'running','queued'}:raise InputError('已有试听或合成任务正在运行。')
+        if self.active:raise InputError('已有任务正在运行，请先等待或暂停。')
+        self.jobs.ensure_available()
 
     def _update_item(self,db,ident,item_id,**fields):
         phase=fields.pop('ws_phase',None)
@@ -589,41 +642,45 @@ class Workspaces:
     def _audio_path(self,ident,item_id):
         return self.cache / (ident+'-'+item_id+'.mp3')
 
-    def _temporary_bytes(self):
-        root=getattr(self.jobs,'root',None)
-        return sum(p.stat().st_size for p in Path(root).rglob('*') if p.is_file()) if root else 0
+    def _sync_cache(self):
+        if os.name!='nt':
+            descriptor=os.open(self.cache,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(descriptor)
+            finally:os.close(descriptor)
 
-    def _release_job(self):
+    def _temporary_bytes(self):
+        return self.jobs.temporary_bytes()
+
+    def _release_job(self,transferred=False):
         ident=self.active_job
         if ident is None:return
-        with getattr(self.jobs,'lock',nullcontext()):
-            item=self.jobs.items.get(ident)
-            if item is None:
-                self.active_job=None;return
-            process=item.get('process')
-            if process is not None and process.poll() is None:
-                try:process.wait(timeout=1)
-                except subprocess.TimeoutExpired:return
-            if item.get('timer'):item['timer'].cancel()
-            shutil.rmtree(item['folder'],ignore_errors=True)
-            if not item['folder'].exists():
-                del self.jobs.items[ident]
-                if hasattr(self.jobs,'request_ids'):
-                    self.jobs.request_ids={k:v for k,v in self.jobs.request_ids.items() if v!=ident}
+        try:
+            if not self.jobs.wait_finished(ident,1):return
+            if not transferred and self.jobs.result_available(ident):return
+            self.jobs.release(ident)
             self.active_job=None
+        except (KeyError,ValueError,OSError):
+            pass  # Complete sources retain their ownership and recovery binding.
 
+    @contextmanager
     def _synthesize(self,ident,item_id,preview):
         if self.synthesizer:
-            return Path(self.synthesizer(preview))
-        job=self.jobs.start(preview['script'],batch_owner='workspace:'+ident,fingerprint=preview['fingerprint'],filename=preview['filename'])
+            source=Path(self.synthesizer(preview))
+            with source.open('rb') as handle:yield handle,source.stat().st_size,None
+            return
+        job=self.jobs.start(preview['script'],batch_owner='workspace:'+ident,fingerprint=preview['fingerprint'],filename=preview['filename'],recovery_context={'workspace_id':ident,'item_id':item_id})
         self.active_job=job['id']
+        with self.db() as db:
+            self._update_item(db,ident,item_id,pending_job=job['id'])
         while not self.stop.wait(.2):
             snapshot=self.jobs.snapshot(job['id'])
             with self.db() as db:
                 db.execute('UPDATE workspaces SET active_item=? WHERE id=?',
                            (json.dumps({'id':item_id,'filename':preview['filename'],'completed':snapshot['completed'],'total':snapshot['total']}),ident))
             if snapshot['status']=='done':
-                return self.jobs.items[job['id']]['folder']/'dialogue.mp3'
+                if not self.jobs.wait_finished(job['id'],3):raise InputError('合成进程尚未完成退出。')
+                with self.jobs.open_result(job['id']) as result:yield result,result.size,result.sha256
+                return
             if snapshot['status'] in {'error','cancelled'}:
                 raise InputError(snapshot.get('error') or '合成未完成。')
         self.jobs.cancel(job['id'])
@@ -678,6 +735,9 @@ class Workspaces:
                         self._bump(db,ident,status='paused',phase='directory_error',message='目录不可用，请重新授权后继续。',active_item=None)
                         break
                     if not cache.is_file():
+                        if row['pending_job']:
+                            self._bump(db,ident,status='paused',phase='save_error',message='完整合成源仍已保留，请恢复缓存空间或权限后重试保存。')
+                            break
                         if mode=='save':
                             self._update_item(db,ident,item_id,status='synthesis_error',error='完整缓存缺失，无法只重试保存。',error_code='missing_cache')
                             continue
@@ -700,29 +760,37 @@ class Workspaces:
                                 self._bump(db,ident,status='paused',phase='storage_error',message='临时结果空间不足，请先保存失败结果。')
                                 break
                             self._update_item(db,ident,item_id,status='running',fingerprint=preview['fingerprint'],ws_phase='generating')
-                            source=self._synthesize(ident,item_id,preview)
-                            size=source.stat().st_size
-                            if not size or size+used+self._temporary_bytes()>self.cache_limit: raise OSError('cache limit')
-                            staging=cache.with_suffix('.tmp')
-                            digest=hashlib.sha256()
-                            with open(source,'rb') as src,open(staging,'wb') as dst:
-                                while True:
-                                    block=src.read(65536)
-                                    if not block:break
-                                    digest.update(block);dst.write(block)
-                                dst.flush();os.fsync(dst.fileno())
-                            with self.cache_lock:
-                                os.replace(staging,cache)
-                                self._after_cache_publish(ident,item_id)
-                                self._update_item(db,ident,item_id,status='saving',error=None,error_code=None,audio_hash=digest.hexdigest(),audio_size=size,ws_phase='saving')
-                            self._release_job()
+                            with self._synthesize(ident,item_id,preview) as (source,size,expected_hash):
+                                if not size or size+used+self._temporary_bytes()>self.cache_limit: raise OSError('cache limit')
+                                staging=cache.with_suffix('.tmp')
+                                digest=hashlib.sha256();copied=0
+                                with open(staging,'wb') as dst:
+                                    while True:
+                                        block=source.read(65536)
+                                        if not block:break
+                                        copied+=len(block);digest.update(block);dst.write(block)
+                                    dst.flush();os.fsync(dst.fileno())
+                                if copied!=size or expected_hash is not None and digest.hexdigest()!=expected_hash:
+                                    raise InputError('完整合成源复制校验失败。')
+                                if self._cache_digest(staging)!=(size,digest.hexdigest()):
+                                    raise InputError('合成缓存格式或内容校验失败。')
+                                with self.cache_lock:
+                                    os.replace(staging,cache)
+                                    self._sync_cache()
+                                    self._after_cache_publish(ident,item_id)
+                                    self._update_item(db,ident,item_id,status='saving',pending_job=None,error=None,error_code=None,audio_hash=digest.hexdigest(),audio_size=size,ws_phase='saving')
+                            self._release_job(transferred=True)
                             row=db.execute('SELECT * FROM items WHERE id=?',(item_id,)).fetchone()
                         except (ValueError,OSError,UnicodeError,KeyError):
                             self._release_job()
                             try:cache.with_suffix('.tmp').unlink(missing_ok=True)
                             except OSError:pass
                             if self.stop.is_set(): break
-                            self._update_item(db,ident,item_id,status='synthesis_error',error='合成失败或输入已变化，可单独重试。',error_code='synthesis_failed')
+                            if self.active_job is not None and self.jobs.result_available(self.active_job):
+                                self._update_item(db,ident,item_id,status='save_error',pending_job=self.active_job,error='完整合成源已保留；缓存写入未完成，可重试保存。',error_code='save_failed')
+                                self._bump(db,ident,status='paused',phase='save_error',message='完整合成源已保留，请恢复空间或权限后重试保存。')
+                                break
+                            self._update_item(db,ident,item_id,status='synthesis_error',pending_job=None,error='合成失败或输入已变化，可单独重试。',error_code='synthesis_failed')
                             failures+=1
                             if failures>=3:
                                 self._bump(db,ident,status='paused',phase='service_error',message='连续三通未完成，已暂停；请检查网络和输入。')
@@ -745,14 +813,14 @@ class Workspaces:
             with self.db() as db:
                 self._bump(db,ident,status='interrupted',phase='error',message='任务已中断；已完成输出及完整缓存保留。',active_item=None)
         finally:
-            with self.lock:
+            with self.jobs.transaction(),self.lock:
                 self.active=None
                 self.active_job=None
-                self.jobs.batch_active=None
+                self.jobs.release_batch('workspace:'+ident)
 
     def action(self,ident,action,payload):
-        cache_facts=self._reconcile_cache() if action=='finish' else None
-        with getattr(self.jobs,'lock',nullcontext()),self.lock,(self.cache_lock if action=='finish' else nullcontext()),self.db() as db:
+        cache_facts=self.reconcile() if action in {'finish','resume','retry'} else None
+        with self.jobs.transaction(),self.lock,(self.cache_lock if action=='finish' else nullcontext()),self.db() as db:
             ws=self._ws(db,ident)
             if action=='cancel-scan':
                 if ident in self.scan_cancel: self.scan_cancel[ident].set()
@@ -797,6 +865,8 @@ class Workspaces:
                 if ws['status'] in ACTIVE or ws['status']=='scanning': raise InputError('请先暂停任务。')
                 if (cache_facts['by_workspace'].get(ident,0) or db.execute("SELECT 1 FROM items WHERE wid=? AND status IN ('save_error','save_pending','saving') LIMIT 1",(ident,)).fetchone()) and payload.get('discard_unsaved') is not True:
                     raise InputError('请先保存尚未保存的完整音频。')
+                if payload.get('discard_unsaved') is True:
+                    self.jobs.discard_workspace_results(ident)
                 db.execute('DELETE FROM items WHERE wid=?',(ident,));db.execute('DELETE FROM files WHERE wid=?',(ident,));db.execute('DELETE FROM requests WHERE wid=?',(ident,))
                 self._bump(db,ident,status='done',phase='finished',active_item=None,run_settings=None,selection_id=uuid.uuid4().hex)
                 with self.cache_lock:
@@ -810,7 +880,7 @@ class Workspaces:
         with self.db() as db:
             self._ws(db,ident)
             rows=db.execute('SELECT * FROM items WHERE wid=? AND revision>? ORDER BY revision,id LIMIT 101',(ident,revision)).fetchall()
-        return {**self.summary(ident),'items':[self._item(r) for r in rows[:100]],'reset':len(rows)>100}
+        return {**self.query_summary(ident),'items':[self._item(r) for r in rows[:100]],'reset':len(rows)>100}
 
     def folders(self,ident,payload):
         with self.lock,self.db() as db:
@@ -928,22 +998,27 @@ class Workspaces:
 
     def safety(self):
         try:
-            cache_facts=self._reconcile_cache()
+            cache_facts=self.reconcile()
             with self.db() as db:
                 busy=db.execute("SELECT 1 FROM workspaces WHERE status IN ('scanning','running','pausing') LIMIT 1").fetchone() is not None
                 unsaved=db.execute("SELECT 1 FROM items WHERE status IN ('save_error','save_pending','saving') LIMIT 1").fetchone() is not None
                 saving=db.execute("SELECT 1 FROM items WHERE status='saving' LIMIT 1").fetchone() is not None
-            return {'busy':bool(busy),'unsaved':bool(unsaved or cache_facts['protected']),'saving':bool(saving),'pending':False,
+            return {'busy':bool(busy),'unsaved':bool(unsaved or cache_facts['protected']),'saving':bool(saving),'pending':bool(cache_facts['unknown']),
                     'unsaved_audio_count':cache_facts['protected'],'unknown_cache_count':cache_facts['unknown']}
         except Exception:
             return {'busy':True,'unsaved':True,'saving':True,'pending':True,'unknown':True}
 
     def close(self):
+        if self._closed:return
         self.stop.set()
         if self.active_job:
             try:self.jobs.cancel(self.active_job)
             except (KeyError,OSError):pass
         for thread in list(self.threads.values()):
             if thread is not threading.current_thread():thread.join(timeout=5)
+        if any(thread.is_alive() and thread is not threading.current_thread() for thread in self.threads.values()):
+            raise InputError('工作区后台任务尚未完全停止。')
         with self.db() as db:
             db.execute("UPDATE workspaces SET phase=CASE WHEN phase='settings' THEN 'recovery_settings' WHEN phase='checking' THEN 'recovery_checking' WHEN status='scanning' THEN 'recovery_scan' ELSE 'recovery' END,status='interrupted',active_item=NULL WHERE status IN ('running','pausing','scanning')")
+        self.reconcile()
+        self._closed=True

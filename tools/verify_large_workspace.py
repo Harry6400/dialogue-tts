@@ -4,6 +4,8 @@ Creates two separate runs of role files so pairs cross enumeration boundaries.
 All input/output/state live in a temporary private directory and are removed.
 """
 import argparse
+import csv
+import hashlib
 import json
 from pathlib import Path
 try:
@@ -18,14 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from native_workspace import NativeWorkspaceAccess
+from web_dialogue.jobs import Jobs
+from native_reports import NativeReportDestination
+from web_dialogue.workspace_reports import HEADERS, WorkspaceReports
 from web_dialogue.workspaces import Workspaces
 
 
-class OfflineJobs:
-    """The injected synthesizer handles all audio; no worker can be started."""
-    batch_active = None
-    def start(self, *args, **kwargs):
-        raise AssertionError('A live worker must never start in this check')
+class OfflineJobs(Jobs):
+    def start(self,*args,**kwargs):raise AssertionError('Online workers are forbidden in offline verification')
 
 
 def wait_for(manager, ident, states, timeout=3600):
@@ -120,6 +122,31 @@ def main():
         report['execution_seconds'] = round(time.monotonic()-execution_started,3)
         report['synthesis_replacements'] = counter['calls']
         assert sum(1 for _ in output.glob('*.mp3'))==args.calls
+        # Whole indexed metadata, independent of any visible page or filter.
+        csv_started=time.monotonic()
+        exports=WorkspaceReports(manager.path,state/'reports')
+        try:
+            manifest=exports.create(ident)
+            csv_path=base/'synthetic-complete-checklist.csv'
+            receipt=exports.save_to_native_destination(manifest['report_id'],NativeReportDestination.from_native_selection(csv_path))
+            assert manifest['rows']==args.calls*2+6 and receipt['size']==manifest['size']
+            digest=hashlib.sha256()
+            with csv_path.open('rb') as handle:
+                for block in iter(lambda:handle.read(65536),b''):digest.update(block)
+            assert digest.hexdigest()==manifest['sha256']==receipt['sha256']
+            rows,first_seen,last_seen=0,False,False
+            source_column=HEADERS.index('源文件名')
+            with csv_path.open(encoding='utf-8-sig',newline='') as handle:
+                reader=csv.reader(handle);assert tuple(next(reader))==HEADERS
+                for row in reader:
+                    rows+=1
+                    first_seen=first_seen or row[source_column]=='0000000000.xml'
+                    last_seen=last_seen or row[source_column]==f'{args.calls-1:09d}1.xml'
+            assert rows==manifest['rows'] and first_seen and last_seen
+            report['csv']={'scope':manifest['scope'],'rows':rows,'size':receipt['size'],'sha256':receipt['sha256'],
+                           'seconds':round(time.monotonic()-csv_started,3),'first_last_sources_present':True,'native_save_verified':True}
+            exports.discard(manifest['report_id'])
+        finally:exports.close()
         # Verify both early and late receipts after all saves and reopening.
         with manager.db() as db:
             endpoints = db.execute("SELECT filename,fingerprint FROM items WHERE wid=? AND status='saved' ORDER BY filename LIMIT 1",(ident,)).fetchall()
@@ -132,6 +159,7 @@ def main():
         report['early_late_receipts_verified_after_reopen'] = True
         report['saved_files'] = args.calls
         access.close()
+        jobs.close()
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if resource else None
     report['peak_rss_mib'] = round(peak/(1024*1024 if sys.platform=='darwin' else 1024),2) if peak else None
     report['total_seconds'] = round(time.monotonic()-started,3)

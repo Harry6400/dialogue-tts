@@ -12,7 +12,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from .app import make_server
+from .app import make_server, close_resources
 from native_close import workspace_safety
 
 
@@ -40,7 +40,7 @@ class ReportHTTPTests(unittest.TestCase):
 
     def tearDown(self):
         self.server.shutdown(); self.thread.join(timeout=5); self.server.server_close()
-        self.server.reports.close(); self.server.workspaces.close(); self.server.jobs.close(); self.server.native_access.close()
+        close_resources(self.server)
         self.assertEqual(self.mp3.read_bytes(), b'untouched sentinel')
         self.assertEqual({path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in self.source.iterdir()}, self.original)
         self.temp.cleanup()
