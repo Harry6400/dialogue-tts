@@ -60,7 +60,11 @@ function activeTable() {
   return table;
 }
 async function findCall(name: string) {
-  const button = await waitFor(() => within(activeTable()).getByText(name, {selector: 'button'}));
+  const button = await waitFor(() => {
+    const button = Array.from(activeTable().querySelectorAll('button')).find(button => button.textContent === name);
+    expect(button).toBeDefined();
+    return button!;
+  });
   expect(button).toBeVisible(); expect(button).toHaveAccessibleName(name);
   return button;
 }
